@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  sige-api:
+    build: .
+    image: sige-app:latest
+    container_name: sige-api-server
+    command: ["api", "-p", "8080"]
+    ports:
+      - "8080:8080"
+    privileged: true
+    restart: unless-stopped
+

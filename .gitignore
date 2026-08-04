@@ -1,0 +1,17 @@
+# Binaries
+sige
+test/test_mem
+
+# Generated config
+config.json
+
+# Environment / Nix / IDE
+.direnv/
+.idea/
+.vscode/
+*.swp
+*.tmp
+*.out
+
+# OS files
+.DS_Store
