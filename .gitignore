@@ -5,13 +5,23 @@ test/test_mem
 # Generated config
 config.json
 
-# Environment / Nix / IDE
-.direnv/
+# Environment / IDE
 .idea/
 .vscode/
 *.swp
 *.tmp
 *.out
+
+# Nix & direnv
+.direnv/
+.envrc
+result
+result-*
+.nix-gc-roots
+.nix-profile
+.nix-defexpr
+flake.nix
+flake.lock
 
 # OS files
 .DS_Store
