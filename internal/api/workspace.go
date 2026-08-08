@@ -1,18 +1,64 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+type CompilationError struct {
+	Stderr string
+}
+
+func (e *CompilationError) Error() string {
+	return "compilation error: " + e.Stderr
+}
+
+func compileSource(language, sourcePath, binaryPath string) error {
+	var compiler string
+	var compileArgs []string
+
+	switch language {
+	case "c":
+		compiler = "gcc"
+		compileArgs = []string{"-O2", "-Wall", sourcePath, "-o", binaryPath, "-lm"}
+	case "cpp", "c++":
+		compiler = "g++"
+		compileArgs = []string{"-O2", "-Wall", sourcePath, "-o", binaryPath, "-lm"}
+	default:
+		return fmt.Errorf("unsupported compilation language: %s", language)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, compiler, compileArgs...)
+	outBytes, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return &CompilationError{Stderr: "Compilation timed out after 10 seconds"}
+		}
+		return &CompilationError{Stderr: string(outBytes)}
+	}
+
+	return nil
+}
 
 func prepareWorkspace(req *ExecuteRequest, execID string) (command string, args []string, cleanup func(), err error) {
 	resolvedFilename := "solution.py"
-	if req.Language == "bash" {
+	switch req.Language {
+	case "bash", "sh":
 		resolvedFilename = "solution.sh"
+	case "c":
+		resolvedFilename = "solution.c"
+	case "cpp", "c++":
+		resolvedFilename = "solution.cpp"
 	}
 
 	if req.Filename != "" {
@@ -57,13 +103,22 @@ func prepareWorkspace(req *ExecuteRequest, execID string) (command string, args 
 		return "", nil, nil, fmt.Errorf("error writing file: %w", err)
 	}
 
+	sandboxFilePath := filepath.Join("/workspace", resolvedFilename)
+
 	switch req.Language {
 	case "python", "python3":
 		command = "/usr/bin/python3"
-		args = []string{targetFilePath}
+		args = []string{sandboxFilePath}
 	case "bash", "sh":
 		command = "/bin/bash"
-		args = []string{targetFilePath}
+		args = []string{sandboxFilePath}
+	case "c", "cpp", "c++":
+		binaryPath := filepath.Join(hostWd, "solution")
+		if err := compileSource(req.Language, targetFilePath, binaryPath); err != nil {
+			return "", nil, cleanup, err
+		}
+		command = "/workspace/solution"
+		args = []string{}
 	default:
 		cleanup()
 		return "", nil, nil, fmt.Errorf("language '%s' not supported", req.Language)
@@ -71,3 +126,4 @@ func prepareWorkspace(req *ExecuteRequest, execID string) (command string, args 
 
 	return command, args, cleanup, nil
 }
+

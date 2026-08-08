@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -69,6 +70,32 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 	execID := fmt.Sprintf("exec-%d-%d", time.Now().UnixNano(), os.Getpid())
 	command, args, cleanup, err := prepareWorkspace(&req, execID)
 	if err != nil {
+		var compErr *CompilationError
+		if errors.As(err, &compErr) {
+			resResult := "failed"
+			if apiMode == "single_evaluation" || apiMode == "multi_evaluation" {
+				resResult = "FAIL"
+			}
+			total := 1
+			if apiMode == "multi_evaluation" {
+				total = len(req.TestCases)
+			}
+			response := ExecuteResponse{
+				Mode:        apiMode,
+				Result:      resResult,
+				ErrorType:   "compilation_error",
+				PassedCount: 0,
+				TotalCount:  total,
+				Execution: &GraderExecution{
+					Stderr: compErr.Stderr,
+					Status: "compilation_error",
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(response)
+			return
+		}
 		http.Error(w, "Error preparing temporary workspace: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

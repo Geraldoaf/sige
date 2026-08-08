@@ -1,6 +1,6 @@
 module sige
 
-go 1.26.1
+go 1.26
 
 require (
 	github.com/containerd/cgroups/v3 v3.1.3
