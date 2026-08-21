@@ -1,30 +1,8 @@
 package cmd
 
 import (
-	"os"
 	"testing"
 )
-
-func TestCLIInitConfig(t *testing.T) {
-
-	_ = os.Remove("config.json")
-	defer os.Remove("config.json")
-
-	initConfigCmd.Run(initConfigCmd, []string{})
-
-	if _, err := os.Stat("config.json"); os.IsNotExist(err) {
-		t.Fatalf("config.json não foi gerado pelo comando init-config")
-	}
-
-	data, err := os.ReadFile("config.json")
-	if err != nil {
-		t.Fatalf("Erro ao ler config.json gerado: %v", err)
-	}
-
-	if len(data) == 0 {
-		t.Fatalf("config.json gerado está vazio")
-	}
-}
 
 func TestCLIVerifyCgroups(t *testing.T) {
 

@@ -25,3 +25,6 @@ flake.lock
 
 # OS files
 .DS_Store
+
+# Secrets — nunca commitar
+secrets/

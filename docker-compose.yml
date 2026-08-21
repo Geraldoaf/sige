@@ -1,13 +1,52 @@
-version: '3.8'
-
 services:
   sige-api:
     build: .
     image: sige-app:latest
     container_name: sige-api-server
-    command: ["api", "-p", "8080"]
     ports:
       - "8080:8080"
-    privileged: true
+
+    cap_add:
+      # Necessário para gerenciamento de cgroups v2, namespaces e pivot_root
+      - SYS_ADMIN
+
+    security_opt:
+      - apparmor:unconfined
+      - seccomp:unconfined
+      # Necessário para permitir file capabilities (setcap) no executável do sandbox
+      - no-new-privileges:false
+
+    cgroup: private
+
+    environment:
+      # Autenticação (chave lida do ambiente ou gerada automaticamente)
+      SIGE_API_KEY: ${SIGE_API_KEY:-}
+      SIGE_TRUSTED_PROXIES: ${SIGE_TRUSTED_PROXIES:-}
+
+      # Modo de operação: interpreter | single_evaluation | multi_evaluation
+      SIGE_API_MODE: ${SIGE_API_MODE:-interpreter}
+
+      # Limites padrão de execução
+      SIGE_MEMORY_MB: ${SIGE_MEMORY_MB:-50}
+      SIGE_CPU: ${SIGE_CPU:-50%}
+      SIGE_TIMEOUT_SEC: ${SIGE_TIMEOUT_SEC:-5}
+      SIGE_TMP_LIMIT_MB: ${SIGE_TMP_LIMIT_MB:-64}
+      SIGE_MAX_FILE_SIZE_MB: ${SIGE_MAX_FILE_SIZE_MB:-15}
+      SIGE_MAX_OPEN_FILES: ${SIGE_MAX_OPEN_FILES:-256}
+
+      # Tetos máximos do servidor
+      SIGE_CEILING_MEMORY_MB: ${SIGE_CEILING_MEMORY_MB:-512}
+      SIGE_CEILING_CPU_PERCENT: ${SIGE_CEILING_CPU_PERCENT:-100}
+      SIGE_CEILING_TIMEOUT_SEC: ${SIGE_CEILING_TIMEOUT_SEC:-30}
+      SIGE_CEILING_TMP_LIMIT_MB: ${SIGE_CEILING_TMP_LIMIT_MB:-256}
+      SIGE_CEILING_MAX_FILE_SIZE_MB: ${SIGE_CEILING_MAX_FILE_SIZE_MB:-64}
+      SIGE_CEILING_MAX_OPEN_FILES: ${SIGE_CEILING_MAX_OPEN_FILES:-512}
+
+    volumes:
+      # Volume para persistência da API key gerada
+      - sige-state:/var/lib/sige
+
     restart: unless-stopped
 
+volumes:
+  sige-state:

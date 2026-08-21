@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sige/internal/api"
+	"sige/internal/config"
 
 	"github.com/spf13/cobra"
 )
@@ -17,17 +18,17 @@ func init() {
 
 var apiCmd = &cobra.Command{
 	Use:   "api",
-	Short: "Starts the API server",
+	Short: "Inicia o servidor HTTP da API",
 	Run: func(cmd *cobra.Command, args []string) {
-
-		if _, err := os.Stat("config.json"); os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "Error: configuration file 'config.json' not found in current folder.\n")
-			fmt.Fprintf(os.Stderr, "Please generate the default configurations first by running:\n\n")
-			fmt.Fprintf(os.Stderr, "    sige init-config\n\n")
+		// Valida configuração na inicialização
+		if _, err := config.Resolve("config.json"); err != nil {
+			fmt.Fprintf(os.Stderr, "[sige] Erro de configuração: %v\n", err)
 			os.Exit(1)
 		}
 
-		fmt.Printf("Starting API on port %s...\n", apiPort)
+		bootstrapPrivileged()
+
+		fmt.Fprintf(os.Stderr, "[sige] Iniciando servidor na porta %s...\n", apiPort)
 		api.StartServer(apiPort)
 	},
 }

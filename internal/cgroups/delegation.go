@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
+// SetupDelegation move processos para /init e habilita controladores cpu, memory e pids na raiz do cgroups.
 func SetupDelegation() {
-
 	if _, err := os.Stat("/sys/fs/cgroup/cgroup.subtree_control"); os.IsNotExist(err) {
 		return
 	}
@@ -16,8 +16,11 @@ func SetupDelegation() {
 		return
 	}
 
-	content := string(data)
-	if strings.Contains(content, "memory") && strings.Contains(content, "pids") {
+	enabled := make(map[string]bool)
+	for _, controller := range strings.Fields(string(data)) {
+		enabled[controller] = true
+	}
+	if enabled["cpu"] && enabled["memory"] && enabled["pids"] {
 		return
 	}
 
@@ -40,5 +43,5 @@ func SetupDelegation() {
 		_ = os.WriteFile("/sys/fs/cgroup/init/cgroup.procs", []byte(pidStr), 0644)
 	}
 
-	_ = os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+memory +pids"), 0644)
+	_ = os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+cpu +memory +pids"), 0644)
 }

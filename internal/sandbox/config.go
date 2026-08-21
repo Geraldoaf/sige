@@ -9,14 +9,16 @@ import (
 )
 
 type Config struct {
-	Name          string
-	MemoryMB      int64
-	CPU           string
-	TimeoutSec    int
-	TmpLimitMB    int
-	MaxFileSizeMB int
-	MaxOpenFiles  int
-	Stdin         string
+	Name              string
+	Workspace         string
+	MemoryMB          int64
+	CPU               string
+	TimeoutSec        int
+	TmpLimitMB        int
+	MaxFileSizeMB     int
+	MaxOpenFiles      int
+	Stdin             string
+	WorkspaceWritable bool
 }
 
 type ExecutionResult struct {
@@ -35,10 +37,12 @@ type ExecutionResult struct {
 	LimitOpenFiles   int           `json:"limit_open_files"`
 }
 
+// GetMemoryBytes retorna o limite de memória em bytes.
 func (c Config) GetMemoryBytes() int64 {
 	return c.MemoryMB * constants.BytesInMB
 }
 
+// GetFormattedCPU retorna a configuração de CPU formatada para o cgroups ("quota period").
 func (c Config) GetFormattedCPU() string {
 	if c.CPU == "" {
 		return ""

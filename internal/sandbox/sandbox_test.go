@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"sige/internal/cgroups"
+	"sige/internal/constants"
 )
 
 func TestMain(m *testing.M) {
@@ -247,6 +248,36 @@ func TestExecuteMemoryMeasurement(t *testing.T) {
 
 	if result.MemoryPeak < 8*1024*1024 {
 		t.Errorf("Esperava que o pico de memória medido fosse maior que 8MB (8388608 bytes), obtido: %d bytes", result.MemoryPeak)
+	}
+}
+
+func TestExecuteOutputLimitExceeded(t *testing.T) {
+	checkPrivileged(t)
+
+	cfg := Config{
+		Name:       "test-output-limit-exceeded",
+		MemoryMB:   100,
+		TimeoutSec: 5,
+	}
+
+	pyScript := `
+import sys
+while True:
+    sys.stdout.write("A" * 65536)
+    sys.stdout.flush()
+`
+
+	result, err := Execute(cfg, "/usr/bin/python3", []string{"-c", pyScript})
+	if err == nil {
+		t.Fatal("Esperava que a execução falhasse por estouro do limite de output, mas o comando executou com sucesso")
+	}
+
+	if result.Status != "output_limit_exceeded" {
+		t.Errorf("Esperava status 'output_limit_exceeded', obteve: %q (erro: %v)", result.Status, err)
+	}
+
+	if len(result.Stdout) > constants.DefaultMaxOutputBytes {
+		t.Errorf("Stdout capturado (%d bytes) excede o limite configurado (%d bytes)", len(result.Stdout), constants.DefaultMaxOutputBytes)
 	}
 }
 

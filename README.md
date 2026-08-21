@@ -1,85 +1,46 @@
-# SIGE - Sistema de Isolamento e Gerenciamento de Execução
+# SIGE — Sandbox de Isolamento para Execução de Código Não Confiável
 
-Este repositório contém a implementação do **SIGE: Sandbox de Isolamento Seguro e Concorrente para Execução de Código Não Confiável**, desenvolvida em Go como projeto de TCC.
+Sandbox em Go que executa código enviado por terceiros sob isolamento de
+kernel: **cgroups v2** (RAM, CPU, PIDs), **namespaces** (PID, NET, UTS, IPC,
+mount), **pivot_root** com raiz somente-leitura, **seccomp BPF** em modo
+allowlist e rebaixamento para um usuário sem privilégio nem capabilities.
+Suporta Python, Bash, C e C++. Projeto de TCC.
 
-## Recurso de Destaque
-- **Isolamento de Recursos:** Limites de RAM (`memory.max`), CPU (`cpu.max`) e PIDs (`pids.max = 50`) via **cgroups v2**.
-- **Isolamento de Processos e Rede:** Linux Namespaces (`PID`, `NET`, `UTS`, `IPC`, `NS`).
-- **Sistema de Arquivos:** Montagens Read-Only com `pivot_root` e diretório `/tmp` em `tmpfs`.
-- **Filtro de Chamadas de Sistema:** **Seccomp BPF** via `libseccomp` com intercepção `ActKillProcess`.
-- **Suporte Multi-Linguagem:** Linguagens interpretadas (`python`, `bash`) e compiladas (`c`, `cpp` / `c++` via `gcc`/`g++`).
-- **Encerramento Atômico:** Suporte a `cgroup.kill` (Kernel 5.14+).
-- **Concorrência:** Servidor HTTP concorrente e avaliação paralela de múltiplos casos de teste com **Goroutines** e `sync.WaitGroup`.
-
----
-
-## Como Funciona a API do SIGE
-
-A API HTTP do SIGE expõe o endpoint `POST /execute` para receber submissões de código, compilá-las (se necessário) e executá-las em instâncias isoladas da sandbox.
-
-### Modos de Operação da API (`api_mode`)
-
-O modo de operação da API é definido no arquivo `config.json` através do campo `"api_mode"`. Existem 3 modos disponíveis:
-
-1. **`interpreter` (Padrão):**
-   - Executa a submissão e retorna o resultado direto do processo (`stdout`, `stderr`, tempo de CPU, consumo de memória, código de saída e status).
-   - Não realiza comparação de saída nem aceita parâmetros de correção automatizada (`expected_stdout` ou `test_cases`).
-
-2. **`single_evaluation`:**
-   - Avalia a submissão contra 1 caso de teste fornecido.
-   - Compara o `stdout` gerado com o `expected_stdout`. Retorna `PASS` se coincidirem (ignorando espaços nas extremidades) ou `FAIL` com `error_type: "output_mismatch"`.
-   - Permite que a requisição sobrescreva limites temporários de recursos (`memory_mb`, `timeout_sec`, etc.).
-
-3. **`multi_evaluation`:**
-   - Avalia a submissão contra uma lista de múltiplos casos de teste (`test_cases`).
-   - Cada caso de teste é executado em **paralelo** em Goroutines separadas, cada uma em sua própria sandbox isolada.
-   - Retorna o total de testes aprovados (`passed_count`), total executado (`total_count`) e detalhes da primeira falha encontrada.
+> **⚠️ O SIGE só roda dentro de Docker — tanto a API quanto o CLI.**
+>
+> Fora de um container, ele exigiria `root` no seu host, alteraria a árvore de
+> cgroups da máquina (competindo com o systemd) e montaria o `/usr`, `/bin` e
+> `/etc` **do host** dentro do sandbox. O container não é empacotamento: é a
+> barreira que torna aceitável executar código não confiável. Para depurar em
+> modo nativo, use uma VM descartável.
 
 ---
 
-## Estrutura da Requisição POST (`POST /execute`)
+## Começando
 
-### Endpoint
-```http
-POST /execute
-Content-Type: application/json
+**Pré-requisitos:** Docker com Compose v2.21+ (`docker compose`, sem hífen) e
+host Linux com **cgroup v2 unificado**. Go, `libseccomp` e os compiladores vão
+todos dentro da imagem.
+
+```bash
+docker compose up --build
 ```
 
-### Campos do Payload JSON (`ExecuteRequest`)
+Sem passo prévio: os limites padrão vêm embutidos no binário e a chave da API é
+gerada no primeiro start, aparecendo no log:
 
-| Campo | Tipo | Obrigatório | Descrição |
-| :--- | :--- | :--- | :--- |
-| `language` | `string` | **Sim** | Linguagem do código: `"python"` / `"python3"`, `"bash"` / `"sh"`, `"c"`, `"cpp"` / `"c++"`. |
-| `code` | `string` | *Condicional* | Código-fonte em texto plano. (Obrigatório caso `file_base64` não seja enviado). |
-| `file_base64` | `string` | *Condicional* | Código-fonte codificado em Base64. |
-| `filename` | `string` | Não | Nome customizado do arquivo (ex: `"main.c"`). |
-| `stdin` | `string` | Não | Entrada padrão enviada ao programa durante a execução. |
-| `expected_stdout` | `string` | Modo `single_evaluation` | Saída esperada para comparação individual. |
-| `test_cases` | `array` | Modo `multi_evaluation` | Lista de objetos `{ "stdin": "...", "expected_stdout": "..." }`. |
-| `memory_mb` | `int` | Não | Limite de memória RAM em MB (sobrescreve o padrão se no modo de avaliação). |
-| `cpu` | `string` | Não | Limite de CPU (ex: `"10"` para 10% ou em formato cgroup `"10000 100000"`). |
-| `timeout_sec` | `int` | Não | Limite de tempo de execução em segundos. |
-| `tmp_limit_mb` | `int` | Não | Limite de espaço em MB para a pasta `/tmp` em `tmpfs`. |
-| `max_file_size_mb` | `int` | Não | Tamanho máximo permitido para escrita de arquivos (MB). |
-| `max_open_files` | `int` | Não | Limite de descritores de arquivos/soquetes abertos. |
+```
+[SIGE]   X-API-Key: 99b1d54121271ddf...
+```
 
----
+Primeira chamada:
 
-## Exemplos de Uso da API
-
-### 1. Execução Simples em Python (Modo `interpreter`)
-
-#### Requisição:
 ```bash
 curl -X POST http://localhost:8080/execute \
-  -H "Content-Type: application/json" \
-  -d '{
-    "language": "python",
-    "code": "print(\"Olá do SIGE!\")"
-  }'
+  -H "X-API-Key: <a chave do log>" \
+  -d '{"language":"python","code":"print(2+2)"}'
 ```
 
-#### Resposta:
 ```json
 {
   "mode": "interpreter",
@@ -87,136 +48,236 @@ curl -X POST http://localhost:8080/execute \
   "passed_count": 1,
   "total_count": 1,
   "execution": {
-    "stdout": "Olá do SIGE!\n",
+    "stdout": "4\n",
     "stderr": "",
     "duration_ms": 15,
-    "cpu_user_time_us": 12000,
-    "cpu_system_time_us": 3000,
     "memory_peak_bytes": 8388608,
-    "exit_code": 0,
-    "status": "success",
-    "limit_memory_bytes": 52428800,
-    "limit_timeout_sec": 5
-  }
-}
-```
-
----
-
-### 2. Avaliação de Código em C (Modo `single_evaluation`)
-
-#### Requisição:
-```bash
-curl -X POST http://localhost:8080/execute \
-  -H "Content-Type: application/json" \
-  -d '{
-    "language": "c",
-    "code": "#include <stdio.h>\nint main() { int a, b; scanf(\"%d %d\", &a, &b); printf(\"%d\\n\", a + b); return 0; }",
-    "stdin": "10 20",
-    "expected_stdout": "30"
-  }'
-```
-
-#### Resposta (Aprovado - `PASS`):
-```json
-{
-  "mode": "single_evaluation",
-  "result": "PASS",
-  "passed_count": 1,
-  "total_count": 1,
-  "execution": {
-    "stdout": "30\n",
-    "stderr": "",
-    "duration_ms": 2,
     "exit_code": 0,
     "status": "success"
   }
 }
 ```
 
----
+Operação:
 
-### 3. Avaliação Paralela em C++ com Múltiplos Casos de Teste (Modo `multi_evaluation`)
-
-#### Requisição:
 ```bash
-curl -X POST http://localhost:8080/execute \
-  -H "Content-Type: application/json" \
-  -d '{
-    "language": "cpp",
-    "code": "#include <iostream>\nusing namespace std;\nint main() { int n; cin >> n; cout << n*n << endl; return 0; }",
-    "test_cases": [
-      { "stdin": "2", "expected_stdout": "4" },
-      { "stdin": "5", "expected_stdout": "25" },
-      { "stdin": "10", "expected_stdout": "100" }
-    ]
-  }'
+docker compose logs -f     # acompanhar
+docker compose restart     # reiniciar (mantém a chave)
+docker compose down        # parar
+docker compose down -v     # parar e descartar a chave gerada
 ```
 
-#### Resposta:
-```json
-{
-  "mode": "multi_evaluation",
-  "result": "PASS",
-  "passed_count": 3,
-  "total_count": 3
-}
-```
+Para fixar sua própria chave, defina `SIGE_API_KEY` (aceita um arquivo `.env`
+ao lado do `docker-compose.yml`).
 
 ---
 
-### 4. Retorno em Caso de Erro de Compilação (`compilation_error`)
+## CLI
 
-Caso o código fornecido em C ou C++ contenha erros de sintaxe, o SIGE captura o `stderr` do compilador e retorna HTTP 200 com a explicação:
+Executa um comando avulso no sandbox, sem passar pela API:
 
-#### Resposta:
-```json
-{
-  "mode": "interpreter",
-  "result": "failed",
-  "error_type": "compilation_error",
-  "passed_count": 0,
-  "total_count": 1,
-  "execution": {
-    "stdout": "",
-    "stderr": "solution.c: In function 'main':\nsolution.c:3:5: error: expected ';' before 'return'\n",
-    "status": "compilation_error"
-  }
-}
+```bash
+docker compose run --rm sige-api \
+  run-task --mem 64 --timeout 5 -- python3 -c "print('Hello Sandbox')"
 ```
+
+Com o servidor já no ar, use o container existente:
+
+```bash
+docker compose exec sige-api \
+  /opt/sige/sige run-task --mem 64 --timeout 5 -- python3 -c "print('Hello')"
+```
+
+Flags: `--mem` (MB), `--cpu` (`"50"` ou `"50%"`), `--timeout` (s),
+`--tmp-limit`, `--file-limit`, `--nofile-limit`. Veja `--help` para a lista
+completa.
 
 ---
 
-## Estrutura do Repositório
+## API
 
-- `cmd/`: CLI da aplicação (subcomandos `api`, `run-task`, `init-config`, `cgroups-version`).
-- `internal/sandbox/`: Motor de isolamento (cgroups v2, namespaces, seccomp BPF, rlimits).
-- `internal/api/`: Servidor REST HTTP, manipulador de workspace e avaliadores de submissões (`interpreter`, `single_evaluation`, `multi_evaluation`).
-- `internal/cgroups/`: Integração com a hierarquia unificada v2 do Linux.
-- `config.json`: Arquivo de configuração de limites padrão e modo da API.
-- `docker-compose.yml`: Containerização para implantação.
+### `POST /execute`
+
+Requer o cabeçalho `X-API-Key`. O comportamento depende do modo de operação
+(`SIGE_API_MODE`):
+
+| Modo | O que faz |
+| :--- | :--- |
+| `interpreter` *(padrão)* | Executa e devolve o resultado bruto. Não compara saída nem aceita parâmetros de correção. |
+| `single_evaluation` | Compara `stdout` com `expected_stdout` → `PASS` / `FAIL`. Aceita limites customizados. |
+| `multi_evaluation` | Avalia contra uma lista de `test_cases`, até 4 sandboxes em paralelo. Retorna aprovados e a primeira falha. |
+
+### Campos da requisição
+
+| Campo | Tipo | Obrigatório | Descrição |
+| :--- | :--- | :--- | :--- |
+| `language` | `string` | **Sim** | `python`/`python3`, `bash`/`sh`, `c`, `cpp`/`c++`. |
+| `code` | `string` | *Condicional* | Código-fonte. Obrigatório se `file_base64` estiver ausente. |
+| `file_base64` | `string` | *Condicional* | Código-fonte em Base64. |
+| `filename` | `string` | Não | Nome do arquivo (só letras, dígitos, `.`, `-`, `_`). |
+| `stdin` | `string` | Não | Entrada padrão do programa. |
+| `expected_stdout` | `string` | `single_evaluation` | Saída esperada. |
+| `test_cases` | `array` | `multi_evaluation` | `[{ "stdin": "...", "expected_stdout": "..." }]` |
+| `memory_mb`, `cpu`, `timeout_sec`, `tmp_limit_mb`, `max_file_size_mb`, `max_open_files` | — | Não | Limites por requisição; aceitos apenas nos modos de avaliação e sempre limitados pelos tetos do servidor. |
+
+### Status da execução
+
+O campo `execution.status` (espelhado em `error_type` quando há falha):
+
+| Status | Significado |
+| :--- | :--- |
+| `success` | Terminou normalmente. |
+| `timeout` | Estourou o limite de tempo; o cgroup inteiro foi morto. |
+| `oom` | Estourou o limite de memória. |
+| `output_limit_exceeded` | Passou de 1 MB de `stdout`/`stderr`; a execução foi encerrada. |
+| `file_size_exceeded` | Tentou gravar arquivo acima do limite. |
+| `compilation_error` | C/C++ não compilou; o `stderr` do compilador vai na resposta. |
+| `failed` | Terminou com erro ou foi morto por sinal — inclusive por violação de seccomp. |
+
+Erros de entrada retornam **400**; ausência de chave configurada no servidor,
+**503**; chave inválida, **401**. Erros de compilação retornam **200** com
+`error_type: "compilation_error"` — a requisição foi processada com sucesso.
 
 ---
 
-## Instalação e Execução
+## Configuração
 
-### 1. Inicializar Configurações
+### Autenticação
+
+A chave é resolvida uma única vez no startup, nesta ordem:
+
+1. Docker Secret em `/run/secrets/sige_api_key`
+2. `SIGE_API_KEY`
+3. Chave persistida de execução anterior (`/var/lib/sige/api_key`)
+4. Uma chave nova, gerada, persistida e impressa no log
+
+**A autenticação nunca é desabilitada por omissão** — `/execute` executa código
+arbitrário, então "sem chave" não pode virar "sem autenticação". O passo 4
+existe para a imagem subir sem configuração e ainda assim exigir credencial. O
+`docker-compose.yml` monta um volume em `/var/lib/sige` para a chave sobreviver
+ao recriar o container.
+
+Para desligar a autenticação em desenvolvimento, o opt-in é explícito:
+`SIGE_ALLOW_UNAUTHENTICATED=true`.
+
+### Onde fica a configuração
+
+Tudo se configura pelo `docker-compose.yml` — **não há arquivo a criar ou
+montar**. A configuração efetiva é resolvida em três camadas, da menor para a
+maior precedência:
+
+1. os padrões embutidos no binário
+2. um `config.json` no diretório de trabalho, **se existir** (opcional)
+3. as variáveis `SIGE_*`
+
+Cada camada só sobrepõe o que define: um `config.json` com um único campo não
+zera o resto, e uma variável ausente não altera nada. Uma variável malformada
+derruba o servidor **no startup**, com mensagem explícita, em vez de falhar na
+primeira requisição.
+
+Para mudar algo, edite o `docker-compose.yml` ou use um `.env`:
+
 ```bash
-go build -o sige main.go
-./sige init-config
+SIGE_MEMORY_MB=200 SIGE_TIMEOUT_SEC=12 docker compose up -d
 ```
 
-### 2. Rodar Sandbox via CLI
+### Servidor
+
+| Variável | Padrão | Descrição |
+| :--- | :--- | :--- |
+| `SIGE_API_KEY` | — | Chave da API. Se vazia, uma é gerada automaticamente. |
+| `SIGE_STATE_DIR` | `/var/lib/sige` | Onde a chave gerada é persistida. |
+| `SIGE_ALLOW_UNAUTHENTICATED` | `false` | Roda sem chave (**apenas desenvolvimento**). |
+| `SIGE_TRUSTED_PROXIES` | vazio | IPs de proxy confiáveis, separados por vírgula. Só para estes o `X-Real-IP` é respeitado no rate limit. |
+| `SIGE_WORKSPACE_DIR` | `/workspace` | Base onde o workspace de cada execução é criado. |
+| `TCC_EXECUTABLE` | o próprio binário | Binário reexecutado para montar o sandbox. No container, `/opt/sige/sige-launch` — a cópia com *file capabilities*. Alterar quebra o isolamento. |
+
+### Modo e limites padrão
+
+| Variável | Padrão | Descrição |
+| :--- | :--- | :--- |
+| `SIGE_API_MODE` | `interpreter` | `interpreter`, `single_evaluation` ou `multi_evaluation`. |
+| `SIGE_MEMORY_MB` | `50` | RAM por execução. |
+| `SIGE_CPU` | `50%` | Cota de CPU. |
+| `SIGE_TIMEOUT_SEC` | `5` | Tempo máximo de execução. |
+| `SIGE_TMP_LIMIT_MB` | `64` | Tamanho do `/tmp` (tmpfs) no sandbox. |
+| `SIGE_MAX_FILE_SIZE_MB` | `15` | Maior arquivo que o código pode gravar. |
+| `SIGE_MAX_OPEN_FILES` | `256` | Descritores abertos simultâneos. |
+
+### Tetos do servidor
+
+Limite máximo que uma requisição pode pedir nos modos de avaliação. Um valor
+acima é **reduzido ao teto**, e ausente ou zerado nunca significa "ilimitado".
+
+| Variável | Padrão |
+| :--- | :--- |
+| `SIGE_CEILING_MEMORY_MB` | `512` |
+| `SIGE_CEILING_CPU_PERCENT` | `100` |
+| `SIGE_CEILING_TIMEOUT_SEC` | `30` |
+| `SIGE_CEILING_TMP_LIMIT_MB` | `256` |
+| `SIGE_CEILING_MAX_FILE_SIZE_MB` | `64` |
+| `SIGE_CEILING_MAX_OPEN_FILES` | `512` |
+
+### Limites fixos
+
+Não configuráveis pelo cliente nem por variável:
+
+| Limite | Valor |
+| :--- | :--- |
+| Corpo da requisição | 10 MB |
+| `code` / `stdin` / `expected_stdout` (cada) | 1 MB |
+| `file_base64` | 2 MB |
+| `test_cases` por requisição | 20 |
+| Sandboxes simultâneos | 4 |
+| `stdout` / `stderr` por execução | 1 MB |
+| Compilação C/C++ | 256 MB RAM, 10 s, 64 MB `/tmp` |
+| Processos por sandbox | 50 |
+
+---
+
+## Testes
+
 ```bash
-./sige run-task --mem 50 --timeout 3 -- python3 -c "print('Hello Sandbox')"
+go test ./...     # unitários; os que exigem privilégio se auto-pulam
 ```
 
-### 3. Rodar Servidor HTTP da API
+A suíte adversarial em `test/real_cases/` (26 casos) exercita o isolamento de
+verdade contra o servidor no ar — fork bomb, escape de namespace, vazamento de
+arquivo na compilação, inundação de saída, processos órfãos. Veja
+[`test/real_cases/README.md`](test/real_cases/README.md) para o que cada caso
+verifica e como interpretar os que são mortos pelo seccomp.
+
+---
+
+## Manutenção
+
+As imagens base são fixadas por **digest**, não por tag, para o build ser
+reprodutível. Atualizar é, portanto, um passo deliberado:
+
 ```bash
-./sige api -p 8080
+docker pull golang:1.26 && docker image inspect golang:1.26 --format '{{index .RepoDigests 0}}'
+docker pull debian:bookworm-slim && docker image inspect debian:bookworm-slim --format '{{index .RepoDigests 0}}'
+# substituir os digests no Dockerfile e reconstruir
 ```
 
-### 4. Executar via Docker
+Antes de cada release:
+
 ```bash
-docker-compose up --build
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ```
+
+Após qualquer mudança no mecanismo de isolamento, rode a suíte adversarial —
+é o que de fato verifica se as garantias continuam valendo.
+
+---
+
+## Estrutura do repositório
+
+| Caminho | Conteúdo |
+| :--- | :--- |
+| `cmd/` | CLI: `api`, `run-task`, `cgroups-version` e os subcomandos internos do sandbox. |
+| `internal/sandbox/` | Motor de isolamento: namespaces, `pivot_root`, seccomp, rlimits. |
+| `internal/api/` | Servidor HTTP, validação, workspace e os três modos de avaliação. |
+| `internal/cgroups/` | Hierarquia cgroup v2 e delegação. |
+| `test/real_cases/` | Suíte adversarial. |
+| `docker-compose.yml` | **O único ambiente de execução suportado.** |

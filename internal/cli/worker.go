@@ -4,6 +4,7 @@ import (
 	"fmt"
 )
 
+// Run processa a execução de tarefas diretamente pelo terminal.
 func Run(input string) {
 	if input != "" {
 		fmt.Printf("Processando entrada do terminal: %s\n", input)
