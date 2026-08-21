@@ -6,6 +6,10 @@ import (
 	"sync"
 )
 
+// maxConcurrentSandboxes limita a quantidade de sandboxes executados em paralelo.
+const maxConcurrentSandboxes = 4
+
+// runInterpreter executa o código no modo interpretador e retorna o resultado da execução.
 func runInterpreter(runSandbox func(string) (sandbox.ExecutionResult, error), stdin string) ExecuteResponse {
 	res, execErr := runSandbox(stdin)
 
@@ -41,6 +45,7 @@ func runInterpreter(runSandbox func(string) (sandbox.ExecutionResult, error), st
 	return response
 }
 
+// runSingleEvaluation avalia o código contra um caso de teste individual.
 func runSingleEvaluation(runSandbox func(string) (sandbox.ExecutionResult, error), stdin, expectedStdout string) ExecuteResponse {
 	res, execErr := runSandbox(stdin)
 
@@ -101,6 +106,7 @@ type testResult struct {
 	tc         TestCase
 }
 
+// runMultiEvaluation avalia o código contra múltiplos casos de teste concorrentemente.
 func runMultiEvaluation(runSandbox func(string) (sandbox.ExecutionResult, error), testCases []TestCase) ExecuteResponse {
 	var response ExecuteResponse
 	response.Mode = "multi_evaluation"
@@ -117,9 +123,14 @@ func runMultiEvaluation(runSandbox func(string) (sandbox.ExecutionResult, error)
 	var wg sync.WaitGroup
 	wg.Add(total)
 
+	sem := make(chan struct{}, maxConcurrentSandboxes)
+
 	for i, tc := range testCases {
 		go func(idx int, testCase TestCase) {
 			defer wg.Done()
+
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
 			res, execErr := runSandbox(testCase.Stdin)
 

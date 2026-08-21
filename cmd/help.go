@@ -28,6 +28,7 @@ func init() {
 	rootCmd.Flags().StringVarP(&cliInput, "input", "i", "", "CLI terminal mode command input")
 }
 
+// Execute inicializa a delegação do cgroups e executa a linha de comando raiz do Cobra.
 func Execute() {
 	cgroups.SetupDelegation()
 

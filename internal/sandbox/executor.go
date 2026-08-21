@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -17,6 +19,56 @@ import (
 	"github.com/containerd/cgroups/v3/cgroup2"
 )
 
+// limitedBuffer limita o tamanho do buffer de saída em memória.
+type limitedBuffer struct {
+	mu       sync.Mutex
+	buf      bytes.Buffer
+	limit    int
+	exceeded bool
+	onExceed func()
+}
+
+func newLimitedBuffer(limit int, onExceed func()) *limitedBuffer {
+	return &limitedBuffer{limit: limit, onExceed: onExceed}
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	remaining := b.limit - b.buf.Len()
+	justExceeded := false
+	if remaining > 0 {
+		toWrite := p
+		if len(toWrite) > remaining {
+			toWrite = toWrite[:remaining]
+		}
+		b.buf.Write(toWrite)
+	}
+	if b.buf.Len() >= b.limit && !b.exceeded {
+		b.exceeded = true
+		justExceeded = true
+	}
+	b.mu.Unlock()
+
+	if justExceeded && b.onExceed != nil {
+		b.onExceed()
+	}
+
+	return len(p), nil
+}
+
+func (b *limitedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *limitedBuffer) Exceeded() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.exceeded
+}
+
+// Run executa o comando no sandbox associado ao cgroups e monitora limites de execução.
 func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (ExecutionResult, error) {
 	self := os.Getenv("TCC_EXECUTABLE")
 	if self == "" {
@@ -49,9 +101,13 @@ func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (Ex
 		return ExecutionResult{}, fmt.Errorf("error changing temporary rootfs permissions: %w", err)
 	}
 
-	wd, err := os.Getwd()
-	if err != nil {
-		return ExecutionResult{}, fmt.Errorf("error obtaining working directory: %w", err)
+	wd := config.Workspace
+	if wd == "" {
+		var err error
+		wd, err = os.Getwd()
+		if err != nil {
+			return ExecutionResult{}, fmt.Errorf("error obtaining working directory: %w", err)
+		}
 	}
 
 	r, w, err := os.Pipe()
@@ -68,14 +124,15 @@ func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (Ex
 		"--tmp-limit", fmt.Sprintf("%d", config.TmpLimitMB),
 		"--file-limit", fmt.Sprintf("%d", config.MaxFileSizeMB),
 		"--nofile-limit", fmt.Sprintf("%d", config.MaxOpenFiles),
-		"--",
-		cmdStr,
 	}
+	if config.WorkspaceWritable {
+		launchArgs = append(launchArgs, "--workspace-writable")
+	}
+	launchArgs = append(launchArgs, "--", cmdStr)
 	launchArgs = append(launchArgs, args...)
 
 	cmd := exec.CommandContext(ctx, self, launchArgs...)
 	cmd.Cancel = func() error {
-
 		killPath := "/sys/fs/cgroup" + cgroupPath + "/cgroup.kill"
 		if err := os.WriteFile(killPath, []byte("1"), 0644); err == nil {
 			return nil
@@ -87,20 +144,22 @@ func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (Ex
 		return nil
 	}
 
-	var stdoutBuf bytes.Buffer
-	var stderrBuf bytes.Buffer
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
+	var outputLimitHit int32
+	onOutputLimitExceeded := func() {
+		if atomic.CompareAndSwapInt32(&outputLimitHit, 0, 1) {
+			cancel()
+		}
+	}
+	stdoutBuf := newLimitedBuffer(constants.DefaultMaxOutputBytes, onOutputLimitExceeded)
+	stderrBuf := newLimitedBuffer(constants.DefaultMaxOutputBytes, onOutputLimitExceeded)
+	cmd.Stdout = stdoutBuf
+	cmd.Stderr = stderrBuf
 
 	if config.Stdin != "" {
 		cmd.Stdin = strings.NewReader(config.Stdin)
 	}
 
 	cmd.ExtraFiles = []*os.File{r}
-
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS | syscall.CLONE_NEWIPC,
-	}
 
 	if err := cmd.Start(); err != nil {
 		w.Close()
@@ -111,12 +170,13 @@ func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (Ex
 
 	if err := cgroups.AddProcessToCgroup(cgroupPath, cmd.Process.Pid); err != nil {
 		w.Close()
+		_ = cmd.Process.Kill()
 		return ExecutionResult{}, fmt.Errorf("error adding process to cgroup: %w", err)
 	}
 
 	w.Close()
 
-	fmt.Printf("Process %d started (timeout: %ds). Waiting...\n", cmd.Process.Pid, config.TimeoutSec)
+	fmt.Fprintf(os.Stderr, "[SIGE] pid=%d timeout=%ds aguardando...\n", cmd.Process.Pid, config.TimeoutSec)
 
 	err = cmd.Wait()
 	duration := time.Since(startTime)
@@ -150,7 +210,12 @@ func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (Ex
 	}
 
 	var status string = "success"
-	if err != nil {
+	if atomic.LoadInt32(&outputLimitHit) == 1 {
+		// Prioridade sobre o resto: independente de err ser nil (corrida em
+		// que o processo termina "sozinho" bem perto do momento do kill),
+		// se o limite de output foi atingido a execução é tratada como tal.
+		status = "output_limit_exceeded"
+	} else if err != nil {
 		status = "failed"
 
 		if ctx.Err() == context.DeadlineExceeded {
@@ -229,6 +294,9 @@ func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (Ex
 		LimitOpenFiles:   config.MaxOpenFiles,
 	}
 
+	if atomic.LoadInt32(&outputLimitHit) == 1 {
+		return res, fmt.Errorf("output limit exceeded (%d bytes)", constants.DefaultMaxOutputBytes)
+	}
 	if ctx.Err() == context.DeadlineExceeded {
 		return res, fmt.Errorf("execution time limit exceeded (%ds)", config.TimeoutSec)
 	}

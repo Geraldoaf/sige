@@ -4,10 +4,12 @@ import (
 	"github.com/containerd/cgroups/v3"
 )
 
+// VerifyCgroupsVersion verifica se o sistema está operando com cgroups v2 no modo Unified.
 func VerifyCgroupsVersion() bool {
 	return cgroups.Mode() == cgroups.Unified
 }
 
+// GetCgroupsMode retorna o modo atual do cgroups no sistema operacional.
 func GetCgroupsMode() string {
 	switch cgroups.Mode() {
 	case cgroups.Unified:

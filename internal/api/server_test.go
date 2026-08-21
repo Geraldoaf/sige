@@ -81,6 +81,11 @@ func TestExecuteHandlerInvalidJSON(t *testing.T) {
 	}
 }
 
+// TestExecuteHandlerMissingConfig cobre o contrato ATUAL: config.json é
+// opcional. Antes a ausência do arquivo derrubava a requisição com 500; hoje
+// a configuração é resolvida em camadas (padrões embutidos < arquivo <
+// variáveis SIGE_*), então sem arquivo nenhum o servidor opera nos padrões.
+// Isso é o que permite a imagem subir sem nenhum passo de configuração.
 func TestExecuteHandlerMissingConfig(t *testing.T) {
 
 	_ = os.Remove("config.json")
@@ -100,8 +105,33 @@ func TestExecuteHandlerMissingConfig(t *testing.T) {
 
 	handler.ServeHTTP(rr, req)
 
+	if status := rr.Code; status == http.StatusInternalServerError {
+		t.Errorf("config.json ausente não deve mais ser erro de servidor, obteve: %v", status)
+	}
+}
+
+// TestExecuteHandlerInvalidEnvConfig garante que o que passou a falhar não é
+// a ausência do arquivo, e sim uma configuração de fato inválida.
+func TestExecuteHandlerInvalidEnvConfig(t *testing.T) {
+
+	_ = os.Remove("config.json")
+	t.Setenv("SIGE_MEMORY_MB", "nao-e-numero")
+
+	reqBody, _ := json.Marshal(ExecuteRequest{
+		Language: "python",
+		Code:     "print('ok')",
+	})
+
+	req, err := http.NewRequest(http.MethodPost, "/execute", bytes.NewBuffer(reqBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	http.HandlerFunc(handleExecute).ServeHTTP(rr, req)
+
 	if status := rr.Code; status != http.StatusInternalServerError {
-		t.Errorf("ExecuteHandler without config.json should fail with 500, got: %v", status)
+		t.Errorf("Configuração inválida deveria retornar 500, obteve: %v", status)
 	}
 }
 

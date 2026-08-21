@@ -5,17 +5,34 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+
+	"sige/internal/cgroups"
 )
 
+// checkPrivileged pula os testes que compilam C/C++: desde que a compilação
+// passou a rodar dentro do mesmo sandbox (namespaces+cgroup) da execução,
+// esses testes viraram testes de integração como os de internal/sandbox.
+func checkPrivileged(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("Pulando teste de integração de compilação: requer privilégios de root")
+	}
+	if !cgroups.VerifyCgroupsVersion() {
+		t.Skip("Pulando teste de integração de compilação: cgroup v2 unificado não disponível")
+	}
+}
+
 func TestPrepareWorkspaceCSuccess(t *testing.T) {
+	checkPrivileged(t)
+
 	req := ExecuteRequest{
 		Language: "c",
 		Code:     "#include <stdio.h>\nint main() { printf(\"Hello C\\n\"); return 0; }",
 	}
 
-	cmd, args, cleanup, err := prepareWorkspace(&req, "test-exec-c")
+	cmd, args, _, cleanup, err := prepareWorkspace(&req, "test-exec-c")
 	if err != nil {
 		t.Fatalf("prepareWorkspace failed for C code: %v", err)
 	}
@@ -30,12 +47,14 @@ func TestPrepareWorkspaceCSuccess(t *testing.T) {
 }
 
 func TestPrepareWorkspaceCPPSuccess(t *testing.T) {
+	checkPrivileged(t)
+
 	req := ExecuteRequest{
 		Language: "cpp",
 		Code:     "#include <iostream>\nint main() { std::cout << \"Hello CPP\" << std::endl; return 0; }",
 	}
 
-	cmd, args, cleanup, err := prepareWorkspace(&req, "test-exec-cpp")
+	cmd, args, _, cleanup, err := prepareWorkspace(&req, "test-exec-cpp")
 	if err != nil {
 		t.Fatalf("prepareWorkspace failed for CPP code: %v", err)
 	}
@@ -50,12 +69,14 @@ func TestPrepareWorkspaceCPPSuccess(t *testing.T) {
 }
 
 func TestPrepareWorkspaceCCompilationError(t *testing.T) {
+	checkPrivileged(t)
+
 	req := ExecuteRequest{
 		Language: "c",
 		Code:     "#include <stdio.h>\nint main() { printf(\"syntax error\") return 0; }",
 	}
 
-	_, _, cleanup, err := prepareWorkspace(&req, "test-exec-c-err")
+	_, _, _, cleanup, err := prepareWorkspace(&req, "test-exec-c-err")
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -75,6 +96,8 @@ func TestPrepareWorkspaceCCompilationError(t *testing.T) {
 }
 
 func TestExecuteHandlerCCompilationErrorResponse(t *testing.T) {
+	checkPrivileged(t)
+
 	cleanup := setupConfigWithMode("interpreter")
 	defer cleanup()
 

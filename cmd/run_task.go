@@ -26,14 +26,13 @@ var runTaskCmd = &cobra.Command{
 	Short: "Runs an isolated command inside a cgroup v2 sandbox",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-
-		defaultCfg, err := config.LoadConfig("config.json")
+		defaultCfg, err := config.Resolve("config.json")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: configuration file 'config.json' not found in current folder.\n")
-			fmt.Fprintf(os.Stderr, "Please generate the default configurations first by running:\n\n")
-			fmt.Fprintf(os.Stderr, "    sige init-config\n\n")
+			fmt.Fprintf(os.Stderr, "Erro de configuração: %v\n", err)
 			os.Exit(1)
 		}
+
+		bootstrapPrivileged()
 
 		custom := config.CustomLimits{}
 		if cmd.Flags().Changed("mem") {

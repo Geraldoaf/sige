@@ -1,16 +1,29 @@
 package api
 
 import (
-	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
+
+	"sige/internal/constants"
+	"sige/internal/sandbox"
 )
+
+// safeFilenameRe define o padrão de caracteres seguros para nomes de arquivos.
+var safeFilenameRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// isSafeFilename valida se o nome do arquivo contém apenas caracteres seguros.
+func isSafeFilename(name string) bool {
+	if name == "." || name == ".." {
+		return false
+	}
+	return safeFilenameRe.MatchString(name)
+}
 
 type CompilationError struct {
 	Stderr string
@@ -20,37 +33,51 @@ func (e *CompilationError) Error() string {
 	return "compilation error: " + e.Stderr
 }
 
-func compileSource(language, sourcePath, binaryPath string) error {
+// compileSource compila código C/C++ de forma isolada dentro do sandbox.
+func compileSource(language, hostWd, sandboxSourcePath, sandboxBinaryPath string) error {
 	var compiler string
 	var compileArgs []string
 
 	switch language {
 	case "c":
-		compiler = "gcc"
-		compileArgs = []string{"-O2", "-Wall", sourcePath, "-o", binaryPath, "-lm"}
+		compiler = "/usr/bin/gcc"
+		compileArgs = []string{"-O2", "-Wall", sandboxSourcePath, "-o", sandboxBinaryPath, "-lm"}
 	case "cpp", "c++":
-		compiler = "g++"
-		compileArgs = []string{"-O2", "-Wall", sourcePath, "-o", binaryPath, "-lm"}
+		compiler = "/usr/bin/g++"
+		compileArgs = []string{"-O2", "-Wall", sandboxSourcePath, "-o", sandboxBinaryPath, "-lm"}
 	default:
 		return fmt.Errorf("unsupported compilation language: %s", language)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	cfg := sandbox.Config{
+		Name:              fmt.Sprintf("compile-%d-%d", time.Now().UnixNano(), os.Getpid()),
+		Workspace:         hostWd,
+		WorkspaceWritable: true,
+		MemoryMB:          constants.DefaultCompileMemoryMB,
+		CPU:               fmt.Sprintf("%d%%", constants.DefaultCompileCPUPercent),
+		TimeoutSec:        constants.DefaultCompileTimeoutSec,
+		TmpLimitMB:        constants.DefaultCompileTmpLimitMB,
+		MaxFileSizeMB:     constants.DefaultCompileMaxFileMB,
+		MaxOpenFiles:      constants.DefaultCompileMaxOpenFiles,
+	}
 
-	cmd := exec.CommandContext(ctx, compiler, compileArgs...)
-	outBytes, err := cmd.CombinedOutput()
+	result, err := sandbox.Execute(cfg, compiler, compileArgs)
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return &CompilationError{Stderr: "Compilation timed out after 10 seconds"}
+		if result.Status == "timeout" {
+			return &CompilationError{Stderr: fmt.Sprintf("Compilation timed out after %d seconds", constants.DefaultCompileTimeoutSec)}
 		}
-		return &CompilationError{Stderr: string(outBytes)}
+		output := strings.TrimSpace(result.Stdout + result.Stderr)
+		if output == "" {
+			output = err.Error()
+		}
+		return &CompilationError{Stderr: output}
 	}
 
 	return nil
 }
 
-func prepareWorkspace(req *ExecuteRequest, execID string) (command string, args []string, cleanup func(), err error) {
+// prepareWorkspace cria o diretório temporário, grava o código-fonte e compila caso necessário.
+func prepareWorkspace(req *ExecuteRequest, execID string) (command string, args []string, workspace string, cleanup func(), err error) {
 	resolvedFilename := "solution.py"
 	switch req.Language {
 	case "bash", "sh":
@@ -62,8 +89,8 @@ func prepareWorkspace(req *ExecuteRequest, execID string) (command string, args 
 	}
 
 	if req.Filename != "" {
-		if strings.Contains(req.Filename, "..") || strings.Contains(req.Filename, "/") || strings.Contains(req.Filename, "\\") {
-			return "", nil, nil, errors.New("Invalid filename in 'filename'")
+		if !isSafeFilename(req.Filename) {
+			return "", nil, "", nil, errors.New("Invalid filename in 'filename'")
 		}
 		resolvedFilename = req.Filename
 	}
@@ -76,9 +103,13 @@ func prepareWorkspace(req *ExecuteRequest, execID string) (command string, args 
 			baseDir = filepath.Join(os.TempDir(), "sige-workspace")
 		}
 	}
+
 	hostWd := filepath.Join(baseDir, execID)
-	if err := os.MkdirAll(hostWd, 0755); err != nil {
-		return "", nil, nil, fmt.Errorf("error creating workspace directory: %w", err)
+	if err := os.MkdirAll(hostWd, 0703); err != nil {
+		return "", nil, "", nil, fmt.Errorf("error creating workspace directory: %w", err)
+	}
+	if err := os.Chmod(hostWd, 0703); err != nil {
+		return "", nil, "", nil, fmt.Errorf("error setting workspace directory permissions: %w", err)
 	}
 
 	cleanup = func() {
@@ -92,7 +123,7 @@ func prepareWorkspace(req *ExecuteRequest, execID string) (command string, args 
 		decoded, err := base64.StdEncoding.DecodeString(req.FileBase64)
 		if err != nil {
 			cleanup()
-			return "", nil, nil, fmt.Errorf("invalid base64 format in 'file_base64': %w", err)
+			return "", nil, "", nil, fmt.Errorf("invalid base64 format in 'file_base64': %w", err)
 		}
 		codeData = decoded
 	}
@@ -100,7 +131,7 @@ func prepareWorkspace(req *ExecuteRequest, execID string) (command string, args 
 	targetFilePath := filepath.Join(hostWd, resolvedFilename)
 	if err := os.WriteFile(targetFilePath, codeData, 0644); err != nil {
 		cleanup()
-		return "", nil, nil, fmt.Errorf("error writing file: %w", err)
+		return "", nil, "", nil, fmt.Errorf("error writing file: %w", err)
 	}
 
 	sandboxFilePath := filepath.Join("/workspace", resolvedFilename)
@@ -113,17 +144,16 @@ func prepareWorkspace(req *ExecuteRequest, execID string) (command string, args 
 		command = "/bin/bash"
 		args = []string{sandboxFilePath}
 	case "c", "cpp", "c++":
-		binaryPath := filepath.Join(hostWd, "solution")
-		if err := compileSource(req.Language, targetFilePath, binaryPath); err != nil {
-			return "", nil, cleanup, err
+		sandboxBinaryPath := filepath.Join("/workspace", "solution")
+		if err := compileSource(req.Language, hostWd, sandboxFilePath, sandboxBinaryPath); err != nil {
+			return "", nil, "", cleanup, err
 		}
-		command = "/workspace/solution"
+		command = sandboxBinaryPath
 		args = []string{}
 	default:
 		cleanup()
-		return "", nil, nil, fmt.Errorf("language '%s' not supported", req.Language)
+		return "", nil, "", nil, fmt.Errorf("language '%s' not supported", req.Language)
 	}
 
-	return command, args, cleanup, nil
+	return command, args, hostWd, cleanup, nil
 }
-

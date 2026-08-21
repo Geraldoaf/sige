@@ -2,13 +2,14 @@ package sandbox
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 
 	"sige/internal/cgroups"
 )
 
+// Execute valida os parâmetros, cria o cgroup e executa o comando no sandbox.
 func Execute(config Config, command string, args []string) (ExecutionResult, error) {
-
 	matched, err := regexp.MatchString(`^[a-zA-Z0-9_-]+$`, config.Name)
 	if err != nil {
 		return ExecutionResult{}, fmt.Errorf("error validating sandbox name: %w", err)
@@ -29,7 +30,12 @@ func Execute(config Config, command string, args []string) (ExecutionResult, err
 		return ExecutionResult{}, fmt.Errorf("error creating cgroup: %w", err)
 	}
 
-	defer cgroups.DeleteCgroup(mgr)
+	// Garante o encerramento dos processos e limpeza do cgroup ao finalizar
+	defer func() {
+		if err := cgroups.KillAndDeleteCgroup(config.Name); err != nil {
+			fmt.Fprintf(os.Stderr, "[SIGE] Aviso: falha ao limpar cgroup da execução: %v\n", err)
+		}
+	}()
 
 	return Run(mgr, config, command, args...)
 }
