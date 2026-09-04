@@ -56,8 +56,48 @@ essas capturam e imprimem `Result: BLOCKED - ...` normalmente.
 | 24 | `24_dev_nodes.py` | `/dev` mínimo disponível (`null`, `zero`, `random`, `urandom`, symlinks) e somente-leitura |
 | 25 | `25_read_application.py` | Binários, config e segredos do SIGE inalcançáveis de dentro do sandbox (equivalente ao fix v1.4.0 do Judge0) |
 | 26 | `26_concurrency.py` | Threads, `multiprocessing` e `/dev/shm` funcionam (protege contra a regressão do `clone3`) |
+| 27 | `27_symlink_escape.py` | Tentativa de escape e quebra de sandbox via symlinks |
+| 28 | `28_signal_trap.py` | Captura de todos os sinais e loop infinito (força timeout/SIGKILL) |
+| 29 | `29_tmpfs_exhaustion.py` | Esgotamento de espaço em disco no `/tmp` (quota tmpfs) |
+| 30 | `30_ipc_keyring_access.c` | Isolamento de IPC SysV e bloqueio de keyctl |
+| 31 | `31_zombie_exhaustion.c` | Criação massiva de processos zumbis (limite pids.max) |
+| 32 | `32_coredump_trigger.c` | Geração de core dump e teste de `RLIMIT_CORE` |
+| 33 | `33_preprocessor_bomb.c` | Ataque de expansão macro exponencial no compilador C |
+| 34 | `34_procfs_probing.py` | Acesso a entradas sensíveis do `/proc` (`kcore`, `kallsyms`, etc.) |
+| 35 | `35_inherited_fd_leak.py` | Varredura de descritores de arquivo (FDs 3-100) herdados |
+| 36 | `36_binary_null_flood.py` | Emissão de bytes nulos binários e UTF-8 corrompido para API |
+| 37 | `37_cve_2024_28185_symlink_write.py` | Classe da CVE-2024-28185: symlink desviando escrita do host |
+| 38 | `38_cve_2024_28189_symlink_chown.py` | Classe da CVE-2024-28189: symlink desviando `chown` do host |
+| 39 | `39_cve_2024_29021_ssrf.py` | Classe da CVE-2024-29021: SSRF para alvos internos |
 
-Os testes 02–22 ainda não estão todos plugados em `run_real_cases_test.go`
-(hoje só o 01 roda via `go test`) — dá pra rodar manualmente com `curl` contra
-uma instância local, ou posso estender o harness Go pra rodar o lote inteiro
-e checar o `status`/`result` esperado de cada um automaticamente.
+Todos os casos podem ser submetidos via POST `/execute` no servidor da API.
+
+## Rastreabilidade: CVEs do Judge0
+
+Os casos 37–39 existem para dar evidência executável — e não apenas
+argumentativa — de que o SIGE não é suscetível às classes de ataque das três
+CVEs de severidade máxima (CVSS 10.0) divulgadas no Judge0 em abril de 2024.
+
+| CVE | Classe de ataque | Caso | Por que o SIGE resiste |
+| :--- | :--- | :--- | :--- |
+| CVE-2024-28185 | Symlink plantado pelo código não confiável desvia uma **escrita** do host para fora do sandbox | 37 | `/workspace` é somente-leitura durante a execução, e a escrita do host ocorre **antes** de qualquer código não confiável rodar |
+| CVE-2024-28189 | Mesma técnica aplicada ao **`chown`** que o host executava | 38 | `chown` não consta da allowlist de syscalls: a operação é inalcançável, não apenas negada. Nenhum `chown` do servidor incide sobre caminho derivado de entrada do usuário |
+| CVE-2024-29021 | **SSRF** via recurso de callback do servidor | 39 | O SIGE não possui callback, webhook ou qualquer requisição HTTP de saída; e o namespace de rede do sandbox não tem interface |
+
+**Nota de precisão terminológica.** O SIGE não "corrige" nem "bloqueia" essas
+CVEs — elas são falhas no código do Judge0, não técnicas genéricas. O que os
+casos demonstram é que o SIGE **não é suscetível às classes de ataque** que
+elas representam. Ao citar estes resultados, prefira essa formulação.
+
+**Verificação complementar do lado do host.** Os casos 37 e 38 observam o
+sistema de dentro do sandbox. Para fechar a evidência, confirme de fora que
+nenhum arquivo apareceu onde os links apontavam:
+
+```bash
+docker compose exec sige-api ls -la /etc/sige_pwned_37 2>&1   # esperado: No such file
+docker compose exec sige-api stat -c '%U:%G %a' /etc/passwd   # esperado: root:root 644, inalterado
+```
+
+O caso 38 termina com o processo morto pelo seccomp, então sua saída para na
+linha `Action: chown ...` — isso é o resultado esperado, conforme a convenção
+descrita acima.

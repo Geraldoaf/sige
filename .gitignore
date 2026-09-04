@@ -28,3 +28,4 @@ flake.lock
 
 # Secrets — nunca commitar
 secrets/
+.claude/

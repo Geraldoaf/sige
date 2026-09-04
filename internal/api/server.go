@@ -1,55 +1,33 @@
 package api
 
 import (
-	"crypto/rand"
-	"crypto/subtle"
-	"encoding/hex"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
-	"sige/internal/config"
-	"sige/internal/sandbox"
+	"os/signal"
 	"strings"
-	"sync"
+	"syscall"
 	"time"
 
-	"golang.org/x/time/rate"
+	"sige/internal/api/handlers"
+	"sige/internal/api/middleware"
+	"sige/internal/api/presenter"
+	"sige/internal/auth"
+	"sige/internal/config"
+	"sige/internal/sandbox"
 )
 
-// maxPayloadBytes define o limite de tamanho do corpo da requisição (10MB).
-const maxPayloadBytes = 10 * 1024 * 1024
-
-const defaultStateDir = "/var/lib/sige"
-
-var (
-	apiKeyOnce     sync.Once
-	resolvedAPIKey string
+const (
+	maxPayloadBytes = 10 << 20 // 10MB
+	defaultStateDir = "/var/lib/sige"
 )
 
-// loadAPIKey obtém a API key configurada (Docker Secret, SIGE_API_KEY ou chave persistida/gerada).
-func loadAPIKey() string {
-	apiKeyOnce.Do(func() {
-		if data, err := os.ReadFile("/run/secrets/sige_api_key"); err == nil {
-			if k := strings.TrimSpace(string(data)); k != "" {
-				resolvedAPIKey = k
-				return
-			}
-		}
-		if k := strings.TrimSpace(os.Getenv("SIGE_API_KEY")); k != "" {
-			resolvedAPIKey = k
-			return
-		}
-		if os.Getenv("SIGE_ALLOW_UNAUTHENTICATED") == "true" {
-			return
-		}
-		resolvedAPIKey = loadOrCreatePersistedKey()
-	})
-	return resolvedAPIKey
-}
+var defaultKeyProvider = auth.NewFileKeyProvider(stateDir(), os.Getenv("SIGE_ALLOW_UNAUTHENTICATED") == "true")
 
 // stateDir retorna o diretório de estado do servidor.
 func stateDir() string {
@@ -59,30 +37,33 @@ func stateDir() string {
 	return defaultStateDir
 }
 
-// loadOrCreatePersistedKey lê a chave salva em disco ou gera uma nova aleatória de 32 bytes.
-func loadOrCreatePersistedKey() string {
-	path := filepath.Join(stateDir(), "api_key")
+// loadAPIKey retorna a chave ativa delegando para o KeyProvider.
+func loadAPIKey() string {
+	return defaultKeyProvider.ResolveKey()
+}
 
-	if data, err := os.ReadFile(path); err == nil {
-		if k := strings.TrimSpace(string(data)); k != "" {
-			return k
+// announceAPIKey exibe no log a forma de autenticação ativa no início do servidor.
+func announceAPIKey() {
+	key := defaultKeyProvider.ResolveKey()
+
+	if key == "" {
+		if os.Getenv("SIGE_ALLOW_UNAUTHENTICATED") == "true" {
+			log.Println("[SIGE] Autenticação desabilitada (SIGE_ALLOW_UNAUTHENTICATED=true)")
+		} else {
+			log.Println("[SIGE] AVISO: nenhuma chave de API configurada.")
 		}
+		return
 	}
 
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		fmt.Fprintf(os.Stderr, "[SIGE] Erro fatal ao gerar API key: %v\n", err)
-		os.Exit(1)
-	}
-	key := hex.EncodeToString(buf)
-
-	if err := os.MkdirAll(stateDir(), 0700); err == nil {
-		if err := os.WriteFile(path, []byte(key+"\n"), 0600); err != nil {
-			fmt.Fprintf(os.Stderr, "[SIGE] Aviso: não foi possível persistir a API key em %s (%v)\n", path, err)
+	if defaultKeyProvider.IsGenerated() {
+		fmt.Fprintf(os.Stdout, "[SIGE] API Key gerada: %s\n", key)
+	} else {
+		masked := key
+		if len(key) >= 8 {
+			masked = key[:4] + "..." + key[len(key)-4:]
 		}
+		fmt.Fprintf(os.Stdout, "[SIGE] API Key carregada: %s\n", masked)
 	}
-
-	return key
 }
 
 // trustedProxies retorna os IPs de proxies confiáveis a partir de SIGE_TRUSTED_PROXIES.
@@ -100,11 +81,19 @@ func trustedProxies() []string {
 	return proxies
 }
 
-// realIP extrai o IP do cliente respeitando X-Real-IP apenas para proxies confiáveis.
+// Bridges para retrocompatibilidade com server_extended_test.go:
+func securityHeaders(next http.HandlerFunc) http.HandlerFunc {
+	mw := middleware.SecurityHeaders(next)
+	return mw.ServeHTTP
+}
+
 func realIP(r *http.Request, proxies []string) string {
 	remoteIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if remoteIP == "" {
+		remoteIP = r.RemoteAddr
+	}
 	for _, proxy := range proxies {
-		if remoteIP == proxy {
+		if remoteIP == strings.TrimSpace(proxy) {
 			if ip := r.Header.Get("X-Real-IP"); ip != "" {
 				return ip
 			}
@@ -113,169 +102,80 @@ func realIP(r *http.Request, proxies []string) string {
 	return remoteIP
 }
 
-type ipLimiter struct {
-	limiter  *rate.Limiter
-	lastSeen time.Time
-}
-
-var (
-	limiters   = make(map[string]*ipLimiter)
-	limitersMu sync.Mutex
-)
-
-const (
-	rateLimitPerSecond = 10
-	rateLimitBurst     = 20
-	limiterIdleTTL     = 5 * time.Minute
-	limiterSweepEvery  = 1 * time.Minute
-)
-
-// getLimiter obtém ou cria o rate limiter para um endereço IP.
-func getLimiter(ip string) *rate.Limiter {
-	limitersMu.Lock()
-	defer limitersMu.Unlock()
-
-	if l, ok := limiters[ip]; ok {
-		l.lastSeen = time.Now()
-		return l.limiter
-	}
-	l := &ipLimiter{
-		limiter:  rate.NewLimiter(rate.Limit(rateLimitPerSecond), rateLimitBurst),
-		lastSeen: time.Now(),
-	}
-	limiters[ip] = l
-	return l.limiter
-}
-
-// startLimiterCleaner executa uma goroutine para limpar rate limiters inativos periodicamente.
-func startLimiterCleaner() {
-	go func() {
-		ticker := time.NewTicker(limiterSweepEvery)
-		defer ticker.Stop()
-		for range ticker.C {
-			limitersMu.Lock()
-			for k, v := range limiters {
-				if time.Since(v.lastSeen) > limiterIdleTTL {
-					delete(limiters, k)
-				}
-			}
-			limitersMu.Unlock()
-		}
-	}()
-}
-
-// securityHeaders adiciona cabeçalhos HTTP básicos de segurança.
-func securityHeaders(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		next(w, r)
-	}
-}
-
-// authMiddleware valida o cabeçalho X-API-Key contra a chave esperada.
-func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		expected := loadAPIKey()
-		if expected == "" {
-			if os.Getenv("SIGE_ALLOW_UNAUTHENTICATED") == "true" {
-				next(w, r)
-				return
-			}
-			http.Error(w, "Server misconfigured: no API key configured (set SIGE_API_KEY, mount the sige_api_key secret, or set SIGE_ALLOW_UNAUTHENTICATED=true for local development)", http.StatusServiceUnavailable)
-			return
-		}
-		provided := r.Header.Get("X-API-Key")
-		if subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) != 1 {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next(w, r)
-	}
-}
-
-// rateLimitMiddleware limita a taxa de requisições por IP de origem.
 func rateLimitMiddleware(proxies []string) func(http.HandlerFunc) http.HandlerFunc {
+	limiter := middleware.NewIPRateLimiter(10, 20, proxies)
 	return func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			ip := realIP(r, proxies)
-			if !getLimiter(ip).Allow() {
-				http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
-				return
-			}
-			next(w, r)
-		}
+		mw := limiter.Middleware()(next)
+		return mw.ServeHTTP
 	}
 }
 
-// chain encadeia múltiplos middlewares a um handler HTTP.
-func chain(h http.HandlerFunc, middlewares ...func(http.HandlerFunc) http.HandlerFunc) http.HandlerFunc {
-	for i := len(middlewares) - 1; i >= 0; i-- {
-		h = middlewares[i](h)
-	}
-	return h
+func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	mw := middleware.AuthMiddleware(defaultKeyProvider)(next)
+	return mw.ServeHTTP
 }
 
-// announceAPIKey exibe no log a forma de autenticação ativa no início do servidor.
-func announceAPIKey() {
-	key := loadAPIKey()
-
-	if key == "" {
-		fmt.Fprintln(os.Stderr, "[SIGE] AVISO: autenticação DESABILITADA (SIGE_ALLOW_UNAUTHENTICATED=true).")
-		return
-	}
-
-	if os.Getenv("SIGE_API_KEY") != "" {
-		fmt.Fprintln(os.Stderr, "[SIGE] Autenticação ativa — chave lida de SIGE_API_KEY.")
-		return
-	}
-	if _, err := os.Stat("/run/secrets/sige_api_key"); err == nil {
-		fmt.Fprintln(os.Stderr, "[SIGE] Autenticação ativa — chave lida do Docker Secret.")
-		return
-	}
-
-	fmt.Fprintln(os.Stderr, "[SIGE] ────────────────────────────────────────────────────────────")
-	fmt.Fprintln(os.Stderr, "[SIGE] Nenhuma API key configurada; uma foi gerada automaticamente.")
-	fmt.Fprintf(os.Stderr, "[SIGE]   X-API-Key: %s\n", key)
-	fmt.Fprintf(os.Stderr, "[SIGE]   (guardada em %s)\n", filepath.Join(stateDir(), "api_key"))
-	fmt.Fprintln(os.Stderr, "[SIGE] ────────────────────────────────────────────────────────────")
-}
-
-const (
-	httpReadHeaderTimeout = 10 * time.Second
-	httpReadTimeout       = 60 * time.Second
-	httpWriteTimeout      = 240 * time.Second
-	httpIdleTimeout       = 60 * time.Second
-	httpMaxHeaderBytes    = 1 << 16
-)
-
-// StartServer inicializa o servidor HTTP na porta especificada.
+// StartServer inicia o servidor HTTP e configura o encadeamento de middlewares com graceful shutdown.
 func StartServer(port string) {
-	fmt.Fprintf(os.Stderr, "[SIGE] Servidor iniciado em http://localhost:%s\n", port)
-
 	announceAPIKey()
 
-	proxies := trustedProxies()
-	rl := rateLimitMiddleware(proxies)
-	startLimiterCleaner()
+	trusted := trustedProxies()
+	rateLimiter := middleware.NewIPRateLimiter(10, 20, trusted)
+	defer rateLimiter.Close()
+
+	authMW := middleware.AuthMiddleware(defaultKeyProvider)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/execute", chain(handleExecute, securityHeaders, authMiddleware, rl))
-	mux.HandleFunc("/", chain(handleHome, securityHeaders))
 
-	server := &http.Server{
-		Addr:              ":" + port,
-		Handler:           mux,
-		ReadHeaderTimeout: httpReadHeaderTimeout,
-		ReadTimeout:       httpReadTimeout,
-		WriteTimeout:      httpWriteTimeout,
-		IdleTimeout:       httpIdleTimeout,
-		MaxHeaderBytes:    httpMaxHeaderBytes,
+	// Rotas Públicas
+	mux.HandleFunc("/", handleHome)
+	mux.HandleFunc("/health", handlers.HandleHealth)
+	mux.HandleFunc("/ready", handlers.HandleReady)
+
+	// Rotas Autenticadas
+	mux.Handle("/languages", authMW(http.HandlerFunc(handlers.HandleLanguages)))
+	mux.Handle("/capacity", authMW(http.HandlerFunc(handlers.HandleCapacity)))
+	mux.Handle("/metrics", authMW(http.HandlerFunc(handlers.HandleMetrics)))
+	mux.Handle("/validate", authMW(http.HandlerFunc(handlers.HandleValidate)))
+	mux.Handle("/execute", authMW(http.HandlerFunc(handleExecute)))
+
+	rootHandler := middleware.SecurityHeaders(rateLimiter.Middleware()(mux))
+
+	addr := port
+	if !strings.HasPrefix(addr, ":") {
+		addr = ":" + addr
 	}
 
-	if err := server.ListenAndServe(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error starting HTTP server: %v\n", err)
-		os.Exit(1)
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           rootHandler,
+		ReadHeaderTimeout: 3 * time.Second,  // Proteção contra ataques Slowloris
+		ReadTimeout:       10 * time.Second, // Timeout de leitura de body
+		WriteTimeout:      35 * time.Second, // Timeout suficiente para cobrir SIGE_CEILING_TIMEOUT_SEC
+		IdleTimeout:       60 * time.Second,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errChan := make(chan error, 1)
+	go func() {
+		log.Printf("[SIGE] Servidor HTTP ouvindo em %s", addr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errChan <- err
+		}
+	}()
+
+	select {
+	case err := <-errChan:
+		log.Fatalf("[SIGE] Erro fatal no servidor HTTP: %v", err)
+	case <-ctx.Done():
+		log.Println("[SIGE] Sinal de desligamento recebido. Encerrando servidor graciosamente...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("[SIGE] Erro no encerramento: %v", err)
+		}
 	}
 }
 
@@ -289,7 +189,7 @@ func HandleExecute(w http.ResponseWriter, r *http.Request) {
 	handleExecute(w, r)
 }
 
-// handleHome processa requisições para a rota raiz (healthcheck / status).
+// handleHome processa requisições para a rota raiz (compatibilidade).
 func handleHome(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "API SIGE - Running in API mode")
@@ -298,18 +198,16 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 // handleExecute valida a requisição, prepara o workspace e executa o código no sandbox.
 func handleExecute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "HTTP method not allowed", http.StatusMethodNotAllowed)
+		presenter.RenderError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "HTTP method not allowed", nil)
 		return
 	}
 
-	// Limite de payload (A1): rejeita bodies maiores que 10MB
+	// Limite de payload: rejeita bodies maiores que 10MB
 	r.Body = http.MaxBytesReader(w, r.Body, maxPayloadBytes)
 
-	// config.json é opcional: Resolve parte dos padrões embutidos, sobrepõe o
-	// arquivo se ele existir e, por último, as variáveis SIGE_*.
 	defaultCfg, err := config.Resolve("config.json")
 	if err != nil {
-		http.Error(w, "Server error: invalid configuration: "+err.Error(), http.StatusInternalServerError)
+		presenter.RenderError(w, http.StatusInternalServerError, "CONFIG_ERROR", "Server error: invalid configuration: "+err.Error(), nil)
 		return
 	}
 
@@ -317,10 +215,10 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&req); err != nil {
 		if err.Error() == "http: request body too large" {
-			http.Error(w, "Request payload too large (max 10MB)", http.StatusRequestEntityTooLarge)
+			presenter.RenderError(w, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "Request payload too large (max 10MB)", nil)
 			return
 		}
-		http.Error(w, "Invalid request JSON: "+err.Error(), http.StatusBadRequest)
+		presenter.RenderError(w, http.StatusBadRequest, "INVALID_JSON", "Invalid request JSON: "+err.Error(), nil)
 		return
 	}
 
@@ -329,7 +227,7 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 		apiMode = "interpreter"
 	}
 	if err := validateRequest(&req, apiMode); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		presenter.RenderError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error(), nil)
 		return
 	}
 
@@ -338,6 +236,12 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 	execID := fmt.Sprintf("exec-%d-%d", time.Now().UnixNano(), os.Getpid())
 	command, args, workspace, cleanup, err := prepareWorkspace(&req, execID)
 	if err != nil {
+		if errors.Is(err, sandbox.ErrAtCapacity) {
+			w.Header().Set("Retry-After", "30")
+			presenter.RenderError(w, http.StatusServiceUnavailable, "AT_CAPACITY", "Server at capacity: too many sandboxes running, retry shortly.", nil)
+			return
+		}
+
 		var compErr *CompilationError
 		if errors.As(err, &compErr) {
 			resResult := "failed"
@@ -359,12 +263,11 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 					Status: "compilation_error",
 				},
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(response)
+			presenter.RenderJSON(w, http.StatusOK, response)
+			handlers.RecordExecution("compilation_error")
 			return
 		}
-		http.Error(w, "Error preparing temporary workspace: "+err.Error(), http.StatusInternalServerError)
+		presenter.RenderError(w, http.StatusInternalServerError, "WORKSPACE_ERROR", "Error preparing temporary workspace: "+err.Error(), nil)
 		return
 	}
 	defer cleanup()
@@ -394,7 +297,11 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 		response = runMultiEvaluation(runSandbox, req.TestCases)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	status := "success"
+	if response.Execution != nil && response.Execution.Status != "" {
+		status = response.Execution.Status
+	}
+	handlers.RecordExecution(status)
+
+	presenter.RenderJSON(w, http.StatusOK, response)
 }

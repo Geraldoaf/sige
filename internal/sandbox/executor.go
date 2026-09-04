@@ -70,7 +70,7 @@ func (b *limitedBuffer) Exceeded() bool {
 
 // Run executa o comando no sandbox associado ao cgroups e monitora limites de execução.
 func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (ExecutionResult, error) {
-	self := os.Getenv("TCC_EXECUTABLE")
+	self := os.Getenv("SIGE_EXECUTABLE")
 	if self == "" {
 		var err error
 		self, err = os.Executable()
@@ -91,7 +91,7 @@ func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (Ex
 
 	cgroupPath := constants.CgroupPrefix + config.Name
 
-	rootfsPath, err := os.MkdirTemp("", "tcc-rootfs-")
+	rootfsPath, err := os.MkdirTemp("", "sige-rootfs-")
 	if err != nil {
 		return ExecutionResult{}, fmt.Errorf("error creating temporary rootfs directory: %w", err)
 	}

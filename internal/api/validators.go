@@ -57,6 +57,12 @@ func validateRequest(req *ExecuteRequest, apiMode string) error {
 		return errors.New("Field 'language' is required")
 	}
 
+	switch req.Language {
+	case "python", "python3", "bash", "sh", "c", "cpp", "c++":
+	default:
+		return fmt.Errorf("Field 'language' is unsupported: '%s'. Supported languages: python, bash, c, cpp", req.Language)
+	}
+
 	if req.Code == "" && req.FileBase64 == "" {
 		return errors.New("You must provide code in 'code' or a base64 file in 'file_base64'")
 	}
