@@ -861,7 +861,7 @@ Contribuições para o **SIGE** são extremamente bem-vindas! Siga o fluxo abaix
 
 Distribuído sob a licença **Apache 2.0**. Consulte o arquivo [LICENSE](LICENSE) para mais detalhes.
 
-Desenvolvido por **[Geraldo Filho](https://github.com/Geraldoaf)** no âmbito do projeto **SIGE** em Engenharia de Software / Ciência da Computação, focado em segurança ofensiva, arquitetura de sistemas concorrentes e isolamento no kernel Linux.
+Desenvolvido por **[Geraldo Afonso G. M. Padua](https://github.com/Geraldoaf)** no âmbito do projeto **SIGE** em Engenharia de Software / Ciência da Computação, focado em segurança ofensiva, arquitetura de sistemas concorrentes e isolamento no kernel Linux.
 
 ---
 
