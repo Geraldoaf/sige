@@ -190,3 +190,141 @@ func TestRealCaseCLI_BinaryCommands(t *testing.T) {
 		t.Errorf("Saída do run-task --help inesperada: %s", string(outRunTaskHelp))
 	}
 }
+
+// TestRealCaseAPI_AllPayloadsSuite carrega e submete todos os 36 casos reais de test/real_cases via POST em /execute
+func TestRealCaseAPI_AllPayloadsSuite(t *testing.T) {
+	cleanup := setupConfig(t, "interpreter")
+	defer cleanup()
+
+	entries, err := os.ReadDir("real_cases")
+	if err != nil {
+		t.Fatalf("Erro ao listar diretório real_cases: %v", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".py") &&
+			!strings.HasSuffix(entry.Name(), ".c") &&
+			!strings.HasSuffix(entry.Name(), ".cpp") &&
+			!strings.HasSuffix(entry.Name(), ".sh") {
+			continue
+		}
+
+		filename := entry.Name()
+		t.Run(filename, func(t *testing.T) {
+			content, err := os.ReadFile("real_cases/" + filename)
+			if err != nil {
+				t.Fatalf("Erro ao ler arquivo %s: %v", filename, err)
+			}
+
+			var lang string
+			switch {
+			case strings.HasSuffix(filename, ".py"):
+				lang = "python"
+			case strings.HasSuffix(filename, ".c"):
+				lang = "c"
+			case strings.HasSuffix(filename, ".cpp"):
+				lang = "cpp"
+			case strings.HasSuffix(filename, ".sh"):
+				lang = "bash"
+			}
+
+			reqBody, _ := json.Marshal(api.ExecuteRequest{
+				Language: lang,
+				Code:     string(content),
+			})
+
+			req := httptest.NewRequest(http.MethodPost, "/execute", bytes.NewReader(reqBody))
+			rr := httptest.NewRecorder()
+
+			api.HandleExecute(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Logf("[%s] API retornou HTTP %d: %s", filename, rr.Code, rr.Body.String())
+			} else {
+				var resp api.ExecuteResponse
+				if err := json.Unmarshal(rr.Body.Bytes(), &resp); err == nil {
+					t.Logf("[%s] OK - Mode: %s, Result: %s, ErrorType: %s", filename, resp.Mode, resp.Result, resp.ErrorType)
+				}
+			}
+		})
+	}
+}
+
+// TestRealCaseAPI_MaliciousPostPayloads envia requisições POST com payloads maliciosos ou anômalos
+func TestRealCaseAPI_MaliciousPostPayloads(t *testing.T) {
+	cleanup := setupConfig(t, "interpreter")
+	defer cleanup()
+
+	tests := []struct {
+		name       string
+		payload    api.ExecuteRequest
+		expectFail bool
+		expectCode int
+	}{
+		{
+			name: "Language With Spaces",
+			payload: api.ExecuteRequest{
+				Language: "  python  ",
+				Code:     "print('spaced language')",
+			},
+			expectCode: http.StatusOK,
+		},
+		{
+			name: "Unicode and Null Bytes in Stdin",
+			payload: api.ExecuteRequest{
+				Language: "python",
+				Code:     "import sys\nprint('Got:', repr(sys.stdin.read()))",
+				Stdin:    "Null:\x00 Unicode:\u2728\U0001F600",
+			},
+			expectCode: http.StatusOK,
+		},
+		{
+			name: "Dangerous Shell Metachars in Filename",
+			payload: api.ExecuteRequest{
+				Language: "python",
+				Code:     "print(1)",
+				Filename: "test;rm -rf /;.py",
+			},
+			expectCode: http.StatusBadRequest,
+		},
+		{
+			name: "DotDot Directory Traversal in Filename",
+			payload: api.ExecuteRequest{
+				Language: "python",
+				Code:     "print(1)",
+				Filename: "../../../evil.py",
+			},
+			expectCode: http.StatusBadRequest,
+		},
+		{
+			name: "Empty Code and Empty Base64",
+			payload: api.ExecuteRequest{
+				Language: "python",
+				Code:     "",
+			},
+			expectCode: http.StatusBadRequest,
+		},
+		{
+			name: "Invalid Base64 in FileBase64",
+			payload: api.ExecuteRequest{
+				Language:   "python",
+				FileBase64: "###notbase64@@@",
+			},
+			expectCode: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, _ := json.Marshal(tt.payload)
+			req := httptest.NewRequest(http.MethodPost, "/execute", bytes.NewReader(body))
+			rr := httptest.NewRecorder()
+
+			api.HandleExecute(rr, req)
+
+			if rr.Code != tt.expectCode {
+				t.Errorf("[%s] Esperado status %d, obtido %d: %s", tt.name, tt.expectCode, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}

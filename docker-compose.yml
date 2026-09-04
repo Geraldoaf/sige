@@ -3,8 +3,23 @@ services:
     build: .
     image: sige-app:latest
     container_name: sige-api-server
+    # Publicado só no loopback: a API executa código arbitrário e não deve
+    # ficar exposta em todas as interfaces por padrão. Para acesso remoto,
+    # coloque um proxy reverso com TLS na frente — o X-API-Key trafega em
+    # texto claro em HTTP.
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
+
+    # Contenção do container inteiro, como segunda camada: os cgroups por
+    # execução limitam CADA sandbox, mas não a soma deles. Dimensione por
+    #   mem_limit >= SIGE_MAX_CONCURRENT_SANDBOXES × SIGE_CEILING_MEMORY_MB
+    #               + folga para o daemon
+    # Com os padrões (8 × 512 MB) o pior caso teórico passa de 4 GB; 4g cobre
+    # com folga o uso real (o padrão por execução é 50 MB). Se elevar o teto
+    # de memória ou a concorrência, eleve isto junto.
+    mem_limit: 4g
+    pids_limit: 1024
+    cpus: 4.0
 
     cap_add:
       # Necessário para gerenciamento de cgroups v2, namespaces e pivot_root
@@ -18,29 +33,9 @@ services:
 
     cgroup: private
 
-    environment:
-      # Autenticação (chave lida do ambiente ou gerada automaticamente)
-      SIGE_API_KEY: ${SIGE_API_KEY:-}
-      SIGE_TRUSTED_PROXIES: ${SIGE_TRUSTED_PROXIES:-}
-
-      # Modo de operação: interpreter | single_evaluation | multi_evaluation
-      SIGE_API_MODE: ${SIGE_API_MODE:-interpreter}
-
-      # Limites padrão de execução
-      SIGE_MEMORY_MB: ${SIGE_MEMORY_MB:-50}
-      SIGE_CPU: ${SIGE_CPU:-50%}
-      SIGE_TIMEOUT_SEC: ${SIGE_TIMEOUT_SEC:-5}
-      SIGE_TMP_LIMIT_MB: ${SIGE_TMP_LIMIT_MB:-64}
-      SIGE_MAX_FILE_SIZE_MB: ${SIGE_MAX_FILE_SIZE_MB:-15}
-      SIGE_MAX_OPEN_FILES: ${SIGE_MAX_OPEN_FILES:-256}
-
-      # Tetos máximos do servidor
-      SIGE_CEILING_MEMORY_MB: ${SIGE_CEILING_MEMORY_MB:-512}
-      SIGE_CEILING_CPU_PERCENT: ${SIGE_CEILING_CPU_PERCENT:-100}
-      SIGE_CEILING_TIMEOUT_SEC: ${SIGE_CEILING_TIMEOUT_SEC:-30}
-      SIGE_CEILING_TMP_LIMIT_MB: ${SIGE_CEILING_TMP_LIMIT_MB:-256}
-      SIGE_CEILING_MAX_FILE_SIZE_MB: ${SIGE_CEILING_MAX_FILE_SIZE_MB:-64}
-      SIGE_CEILING_MAX_OPEN_FILES: ${SIGE_CEILING_MAX_OPEN_FILES:-512}
+    env_file:
+      - path: .env
+        required: false
 
     volumes:
       # Volume para persistência da API key gerada

@@ -22,6 +22,15 @@ func Execute(config Config, command string, args []string) (ExecutionResult, err
 		return ExecutionResult{}, fmt.Errorf("system does not support cgroup v2 or is not in Unified Mode")
 	}
 
+	// Teto global de sandboxes simultâneos. Fica aqui, e não na camada HTTP,
+	// porque este é o ponto único por onde passam TODOS os caminhos: os três
+	// modos da API, a compilação C/C++ e o CLI run-task.
+	release, err := acquireSlot()
+	if err != nil {
+		return ExecutionResult{Status: "at_capacity"}, err
+	}
+	defer release()
+
 	memBytes := config.GetMemoryBytes()
 	cpuFormatted := config.GetFormattedCPU()
 

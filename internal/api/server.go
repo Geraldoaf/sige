@@ -60,6 +60,11 @@ func stateDir() string {
 }
 
 // loadOrCreatePersistedKey lê a chave salva em disco ou gera uma nova aleatória de 32 bytes.
+// apiKeyFoiGerada indica que a chave em uso nasceu NESTE start, e não foi
+// lida de uma execução anterior. Só nesse caso ela é impressa por inteiro no
+// log (ver announceAPIKey).
+var apiKeyFoiGerada bool
+
 func loadOrCreatePersistedKey() string {
 	path := filepath.Join(stateDir(), "api_key")
 
@@ -68,6 +73,8 @@ func loadOrCreatePersistedKey() string {
 			return k
 		}
 	}
+
+	apiKeyFoiGerada = true
 
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
@@ -234,10 +241,28 @@ func announceAPIKey() {
 		return
 	}
 
+	caminho := filepath.Join(stateDir(), "api_key")
+
+	// A chave completa é impressa UMA única vez: no start em que ela foi
+	// gerada. Nos reinícios seguintes sai apenas o prefixo.
+	//
+	// Sem essa distinção, todo restart reemitia a credencial para o stderr —
+	// e, num ambiente com coleta centralizada de logs, ela ficaria
+	// indefinidamente em texto claro num sistema cujo controle de acesso é
+	// tipicamente mais frouxo que o do servidor. Imprimir na geração é o que
+	// permite subir sem configuração prévia; repetir a cada boot não tem
+	// utilidade e só amplia a exposição.
 	fmt.Fprintln(os.Stderr, "[SIGE] ────────────────────────────────────────────────────────────")
-	fmt.Fprintln(os.Stderr, "[SIGE] Nenhuma API key configurada; uma foi gerada automaticamente.")
-	fmt.Fprintf(os.Stderr, "[SIGE]   X-API-Key: %s\n", key)
-	fmt.Fprintf(os.Stderr, "[SIGE]   (guardada em %s)\n", filepath.Join(stateDir(), "api_key"))
+	if apiKeyFoiGerada {
+		fmt.Fprintln(os.Stderr, "[SIGE] Nenhuma API key configurada; uma foi gerada automaticamente.")
+		fmt.Fprintf(os.Stderr, "[SIGE]   X-API-Key: %s\n", key)
+		fmt.Fprintln(os.Stderr, "[SIGE]   Anote agora: esta é a única vez que ela aparece no log.")
+	} else {
+		fmt.Fprintf(os.Stderr, "[SIGE] Autenticação ativa — usando a chave gerada anteriormente (%s…).\n", key[:8])
+		fmt.Fprintf(os.Stderr, "[SIGE]   Para recuperá-la: docker compose exec sige-api cat %s\n", caminho)
+	}
+	fmt.Fprintf(os.Stderr, "[SIGE]   (guardada em %s)\n", caminho)
+	fmt.Fprintln(os.Stderr, "[SIGE] Defina SIGE_API_KEY ou um Docker Secret para fixá-la.")
 	fmt.Fprintln(os.Stderr, "[SIGE] ────────────────────────────────────────────────────────────")
 }
 
@@ -338,6 +363,14 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 	execID := fmt.Sprintf("exec-%d-%d", time.Now().UnixNano(), os.Getpid())
 	command, args, workspace, cleanup, err := prepareWorkspace(&req, execID)
 	if err != nil {
+		// Saturação na etapa de compilação é condição transitória do
+		// servidor, não erro do cliente: 503 com Retry-After.
+		if errors.Is(err, sandbox.ErrAtCapacity) {
+			w.Header().Set("Retry-After", "30")
+			http.Error(w, "Server at capacity: too many sandboxes running, retry shortly.", http.StatusServiceUnavailable)
+			return
+		}
+
 		var compErr *CompilationError
 		if errors.As(err, &compErr) {
 			resResult := "failed"

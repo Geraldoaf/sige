@@ -56,8 +56,15 @@ func ConfigureSandboxNamespace(rootfs, workspace string, tmpLimitMB, fileLimitMB
 	if err := os.MkdirAll(procDest, 0755); err != nil {
 		return fmt.Errorf("error creating proc directory in rootfs: %w", err)
 	}
-	if err := syscall.Mount("proc", procDest, "proc", 0, "hidepid=2"); err != nil {
+	// MS_NOSUID|MS_NODEV|MS_NOEXEC: as mesmas proteções dos demais mounts,
+	// que aqui faltavam (as flags eram 0).
+	if err := syscall.Mount("proc", procDest, "proc",
+		syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "hidepid=2"); err != nil {
 		return fmt.Errorf("error mounting proc: %w", err)
+	}
+
+	if err := hardenProc(procDest); err != nil {
+		return err
 	}
 
 	// Monta /tmp em tmpfs
@@ -142,6 +149,73 @@ func ConfigureSandboxNamespace(rootfs, workspace string, tmpLimitMB, fileLimitMB
 	}
 	if err := syscall.Setuid(constants.DefaultUIDNobody); err != nil {
 		return fmt.Errorf("error dropping UID privileges to nobody: %w", err)
+	}
+
+	return nil
+}
+
+// procMaskedFiles são arquivos de /proc que expõem estado do kernel e não têm
+// uso legítimo para o código do usuário. São cobertos por um bind de
+// /dev/null — a leitura devolve vazio em vez de conteúdo do kernel.
+//
+// /proc/kcore é o caso mais grave: é a imagem da memória física do kernel.
+// /proc/sysrq-trigger aciona funções de emergência (inclusive reiniciar a
+// máquina). Os demais vazam layout de memória e temporização, úteis para
+// contornar KASLR. É o mesmo conjunto que o Docker mascara por padrão.
+var procMaskedFiles = []string{
+	"kcore", "keys", "key-users", "sysrq-trigger",
+	"timer_list", "timer_stats", "sched_debug", "latency_stats", "interrupts",
+}
+
+// procMaskedDirs são diretórios de /proc cobertos por um tmpfs vazio e
+// somente-leitura.
+var procMaskedDirs = []string{"acpi", "asound", "scsi"}
+
+// procReadonlyPaths permanecem visíveis (há código que lê /proc/sys), mas
+// remontados somente-leitura. O código do usuário não tem capability para
+// escrever neles de qualquer forma; isto é defesa em profundidade.
+var procReadonlyPaths = []string{"bus", "fs", "irq", "sys"}
+
+// hardenProc mascara os caminhos sensíveis de /proc dentro do rootfs.
+// Executado antes do pivot_root, quando o /dev do container ainda é visível
+// para servir de fonte do bind.
+func hardenProc(procDest string) error {
+	for _, nome := range procMaskedFiles {
+		alvo := filepath.Join(procDest, nome)
+		if _, err := os.Stat(alvo); err != nil {
+			// Não existe neste kernel (timer_stats, por exemplo, foi
+			// removido); nada a mascarar.
+			continue
+		}
+		if err := syscall.Mount("/dev/null", alvo, "", syscall.MS_BIND, ""); err != nil {
+			return fmt.Errorf("error masking /proc/%s: %w", nome, err)
+		}
+	}
+
+	for _, nome := range procMaskedDirs {
+		alvo := filepath.Join(procDest, nome)
+		if _, err := os.Stat(alvo); err != nil {
+			continue
+		}
+		flags := uintptr(syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV | syscall.MS_NOEXEC)
+		if err := syscall.Mount("tmpfs", alvo, "tmpfs", flags, "size=0,mode=0555"); err != nil {
+			return fmt.Errorf("error masking /proc/%s: %w", nome, err)
+		}
+	}
+
+	for _, nome := range procReadonlyPaths {
+		alvo := filepath.Join(procDest, nome)
+		if _, err := os.Stat(alvo); err != nil {
+			continue
+		}
+		if err := syscall.Mount(alvo, alvo, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+			return fmt.Errorf("error binding /proc/%s: %w", nome, err)
+		}
+		flags := uintptr(syscall.MS_BIND | syscall.MS_REMOUNT | syscall.MS_RDONLY |
+			syscall.MS_NOSUID | syscall.MS_NODEV | syscall.MS_NOEXEC)
+		if err := syscall.Mount("", alvo, "", flags, ""); err != nil {
+			return fmt.Errorf("error remounting /proc/%s as read-only: %w", nome, err)
+		}
 	}
 
 	return nil

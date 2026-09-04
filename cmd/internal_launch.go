@@ -84,11 +84,18 @@ var internalLaunchNSChildCmd = &cobra.Command{
 	Args:   cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 
-		if rootfs != "" && workspace != "" {
-			if err := sandbox.ConfigureSandboxNamespace(rootfs, workspace, tmpLimitMB, fileLimitMB, nofileLimit, workspaceWritable); err != nil {
-				fmt.Fprintf(os.Stderr, "Erro ao configurar namespaces do sandbox: %v\n", err)
-				os.Exit(1)
-			}
+		// Fail-closed: antes, argumentos vazios faziam este bloco ser PULADO e
+		// o comando do usuário rodava mesmo assim — sem pivot_root, sem
+		// rlimits, sem esvaziar o bounding set e sem rebaixar para nobody.
+		// Isolamento não pode ser opcional: sem os caminhos, aborta.
+		if rootfs == "" || workspace == "" {
+			fmt.Fprintln(os.Stderr, "Erro: --rootfs e --workspace são obrigatórios; recusando executar sem isolamento.")
+			os.Exit(1)
+		}
+
+		if err := sandbox.ConfigureSandboxNamespace(rootfs, workspace, tmpLimitMB, fileLimitMB, nofileLimit, workspaceWritable); err != nil {
+			fmt.Fprintf(os.Stderr, "Erro ao configurar namespaces do sandbox: %v\n", err)
+			os.Exit(1)
 		}
 
 		targetCmd := args[0]
