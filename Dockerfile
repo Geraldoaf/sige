@@ -38,7 +38,7 @@ COPY --from=builder /app/sige /opt/sige/sige
 RUN cp /opt/sige/sige /opt/sige/sige-launch && \
     setcap cap_sys_admin,cap_setuid,cap_setgid,cap_setpcap+ep /opt/sige/sige-launch
 
-ENV TCC_EXECUTABLE=/opt/sige/sige-launch
+ENV SIGE_EXECUTABLE=/opt/sige/sige-launch
 
 COPY test /workspace/test
 

@@ -8,6 +8,6 @@ for key, value in sorted(os.environ.items()):
 
 print(f"Total variables: {len(os.environ)}")
 print("Expected: only PATH, HOME, LANG, TERM (ver cleanEnv em cmd/internal_launch.go) —")
-print("nada do processo da API (ex.: SIGE_API_KEY, TCC_EXECUTABLE, SIGE_TRUSTED_PROXIES,")
+print("nada do processo da API (ex.: SIGE_API_KEY, SIGE_EXECUTABLE, SIGE_TRUSTED_PROXIES,")
 print("SIGE_WORKSPACE_DIR não devem aparecer aqui).")
 print("=== END TEST 17 ===")
