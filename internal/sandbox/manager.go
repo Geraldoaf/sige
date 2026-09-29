@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"regexp"
@@ -10,6 +11,14 @@ import (
 
 // Execute valida os parâmetros, cria o cgroup e executa o comando no sandbox.
 func Execute(config Config, command string, args []string) (ExecutionResult, error) {
+	return ExecuteContext(context.Background(), config, command, args)
+}
+
+// ExecuteContext valida os parâmetros, cria o cgroup e executa o comando herdando o cancelamento do context informado.
+func ExecuteContext(ctx context.Context, config Config, command string, args []string) (ExecutionResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	matched, err := regexp.MatchString(`^[a-zA-Z0-9_-]+$`, config.Name)
 	if err != nil {
 		return ExecutionResult{}, fmt.Errorf("error validating sandbox name: %w", err)
@@ -25,7 +34,7 @@ func Execute(config Config, command string, args []string) (ExecutionResult, err
 	// Teto global de sandboxes simultâneos. Fica aqui, e não na camada HTTP,
 	// porque este é o ponto único por onde passam TODOS os caminhos: os três
 	// modos da API, a compilação C/C++ e o CLI run-task.
-	release, err := acquireSlot()
+	release, err := acquireSlotContext(ctx)
 	if err != nil {
 		return ExecutionResult{Status: "at_capacity"}, err
 	}
@@ -46,5 +55,5 @@ func Execute(config Config, command string, args []string) (ExecutionResult, err
 		}
 	}()
 
-	return Run(mgr, config, command, args...)
+	return RunContext(ctx, mgr, config, command, args...)
 }

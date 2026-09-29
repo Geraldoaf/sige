@@ -70,6 +70,14 @@ func (b *limitedBuffer) Exceeded() bool {
 
 // Run executa o comando no sandbox associado ao cgroups e monitora limites de execução.
 func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (ExecutionResult, error) {
+	return RunContext(context.Background(), mgr, config, cmdStr, args...)
+}
+
+// RunContext executa o comando no sandbox herdando o cancelamento do context informado.
+func RunContext(parentCtx context.Context, mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (ExecutionResult, error) {
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
 	self := os.Getenv("SIGE_EXECUTABLE")
 	if self == "" {
 		var err error
@@ -83,9 +91,9 @@ func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (Ex
 	var cancel context.CancelFunc
 
 	if config.TimeoutSec > 0 {
-		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(config.TimeoutSec)*time.Second)
+		ctx, cancel = context.WithTimeout(parentCtx, time.Duration(config.TimeoutSec)*time.Second)
 	} else {
-		ctx, cancel = context.WithCancel(context.Background())
+		ctx, cancel = context.WithCancel(parentCtx)
 	}
 	defer cancel()
 
@@ -132,6 +140,7 @@ func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (Ex
 	launchArgs = append(launchArgs, args...)
 
 	cmd := exec.CommandContext(ctx, self, launchArgs...)
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Cancel = func() error {
 		killPath := "/sys/fs/cgroup" + cgroupPath + "/cgroup.kill"
 		if err := os.WriteFile(killPath, []byte("1"), 0644); err == nil {
@@ -171,6 +180,7 @@ func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (Ex
 	if err := cgroups.AddProcessToCgroup(cgroupPath, cmd.Process.Pid); err != nil {
 		w.Close()
 		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		return ExecutionResult{}, fmt.Errorf("error adding process to cgroup: %w", err)
 	}
 
@@ -223,12 +233,12 @@ func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (Ex
 		} else if exitErr, ok := err.(*exec.ExitError); ok {
 			ws := exitErr.Sys().(syscall.WaitStatus)
 
-			if (ws.Signaled() && ws.Signal() == syscall.SIGXFSZ) ||
-				strings.Contains(stderrBuf.String(), "File too large") ||
-				strings.Contains(stderrBuf.String(), "File size limit exceeded") {
+			isSigXFSZ := (ws.Signaled() && ws.Signal() == syscall.SIGXFSZ) ||
+				(ws.Exited() && ws.ExitStatus() == 128+int(syscall.SIGXFSZ))
+
+			if isSigXFSZ {
 				status = "file_size_exceeded"
 			} else {
-
 				eventsPath := "/sys/fs/cgroup" + cgroupPath + "/memory.events"
 				if data, oomErr := os.ReadFile(eventsPath); oomErr == nil {
 					lines := strings.Split(string(data), "\n")
@@ -243,7 +253,10 @@ func Run(mgr *cgroup2.Manager, config Config, cmdStr string, args ...string) (Ex
 					}
 				}
 
-				if status == "failed" && ws.Signaled() && ws.Signal() == syscall.SIGKILL {
+				isSigKill := (ws.Signaled() && ws.Signal() == syscall.SIGKILL) ||
+					(ws.Exited() && ws.ExitStatus() == 128+int(syscall.SIGKILL))
+
+				if status == "failed" && isSigKill {
 					status = "oom"
 				}
 			}

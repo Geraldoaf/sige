@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,8 +62,15 @@ func CompileSource(language, hostWd, sandboxSourcePath, sandboxBinaryPath string
 
 	result, err := Execute(cfg, compiler, compileArgs)
 	if err != nil {
+		if errors.Is(err, ErrAtCapacity) {
+			return err
+		}
 		if result.Status == "timeout" {
 			return &CompilationError{Stderr: fmt.Sprintf("Compilation timed out after %d seconds", constants.DefaultCompileTimeoutSec)}
+		}
+		// Se result.Status for vazio e err não for erro de exit code, é erro de infraestrutura
+		if result.Status == "" && !strings.Contains(err.Error(), "exit status") {
+			return err
 		}
 		output := strings.TrimSpace(result.Stdout + result.Stderr)
 		if output == "" {
@@ -129,16 +137,22 @@ func PrepareWorkspace(spec WorkspaceSpec) (*PreparedWorkspace, error) {
 		}
 	}
 
-	execID := spec.ExecID
-	if execID == "" {
-		execID = fmt.Sprintf("exec-%d-%d", time.Now().UnixNano(), os.Getpid())
+	var hostWd string
+	var err error
+	if spec.ExecID != "" {
+		hostWd = filepath.Join(baseDir, spec.ExecID)
+		if err := os.Mkdir(hostWd, 0703); err != nil && !os.IsExist(err) {
+			return nil, fmt.Errorf("error creating workspace directory: %w", err)
+		}
+	} else {
+		hostWd, err = os.MkdirTemp(baseDir, "exec-")
+		if err != nil {
+			return nil, fmt.Errorf("error creating temporary workspace directory: %w", err)
+		}
 	}
 
-	hostWd := filepath.Join(baseDir, execID)
-	if err := os.MkdirAll(hostWd, 0703); err != nil {
-		return nil, fmt.Errorf("error creating workspace directory: %w", err)
-	}
 	if err := os.Chmod(hostWd, 0703); err != nil {
+		_ = os.RemoveAll(hostWd)
 		return nil, fmt.Errorf("error setting workspace directory permissions: %w", err)
 	}
 
@@ -178,6 +192,7 @@ func PrepareWorkspace(spec WorkspaceSpec) (*PreparedWorkspace, error) {
 	case "c", "cpp", "c++":
 		sandboxBinaryPath := filepath.Join("/workspace", "solution")
 		if err := CompileSource(spec.Language, hostWd, sandboxFilePath, sandboxBinaryPath); err != nil {
+			cleanup()
 			return nil, err
 		}
 		command = sandboxBinaryPath

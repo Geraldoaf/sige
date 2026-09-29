@@ -3,10 +3,10 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"sige/internal/api/presenter"
 	"sige/internal/config"
 	"sige/internal/sandbox"
+	"strings"
 )
 
 // ValidateRequestDTO representa a requisição a ser validada.
@@ -65,12 +65,11 @@ func HandleValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiMode := os.Getenv("SIGE_API_MODE")
+	baseCfg, _ := config.Resolve("config.json")
+	apiMode := strings.ToLower(strings.TrimSpace(baseCfg.APIMode))
 	if apiMode == "" {
 		apiMode = "interpreter"
 	}
-
-	baseCfg, _ := config.Resolve("config.json")
 	customLimits := config.CustomLimits{
 		MemoryMB:      req.MemoryMB,
 		CPU:           req.CPU,

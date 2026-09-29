@@ -32,8 +32,8 @@ var allowedSyscalls = []string{
 	// Processo e execução
 	"arch_prctl", "execve", "execveat", "exit", "exit_group", "fork",
 	"get_robust_list", "getpgrp", "getpid", "getppid", "getsid",
-	"gettid", "prctl", "rseq", "set_robust_list", "set_tid_address",
-	"setsid", "vfork", "wait4", "waitid",
+	"gettid", "pidfd_open", "pidfd_send_signal", "prctl", "rseq",
+	"set_robust_list", "set_tid_address", "setsid", "vfork", "wait4", "waitid",
 
 	// Sinais
 	"kill", "pause", "restart_syscall", "rt_sigaction", "rt_sigpending",
@@ -74,10 +74,11 @@ var allowedSyscalls = []string{
 	"sched_yield", "set_thread_area",
 
 	// Sockets (namespace de rede vazio — sem alcance externo)
+	// Nota: socket e socketpair são tratados condicionalmente por allowSocketFamilies
+	// para permitir estritamente AF_UNIX, AF_INET e AF_INET6.
 	"accept", "accept4", "bind", "connect", "getpeername",
 	"getsockname", "getsockopt", "listen", "recvfrom", "recvmsg",
-	"sendmsg", "sendto", "setsockopt", "shutdown", "socket",
-	"socketpair",
+	"sendmsg", "sendto", "setsockopt", "shutdown",
 
 	// Tempo (inclui os que normalmente vêm por vDSO)
 	"clock_getres", "clock_gettime", "clock_gettime64",
@@ -138,6 +139,9 @@ func ApplySeccompFilter() error {
 	if err := denyClone3WithENOSYS(filter); err != nil {
 		return err
 	}
+	if err := allowSocketFamilies(filter); err != nil {
+		return err
+	}
 
 	return filter.Load()
 }
@@ -187,3 +191,32 @@ func denyClone3WithENOSYS(filter *seccomp.ScmpFilter) error {
 	}
 	return nil
 }
+
+// allowSocketFamilies permite socket(2) e socketpair(2) apenas para famílias seguras:
+// AF_UNIX, AF_INET e AF_INET6. Famílias como AF_VSOCK (40), AF_ALG (38),
+// AF_NETLINK (16) e AF_PACKET (17) são bloqueadas pela ação padrão (ActKillProcess).
+func allowSocketFamilies(filter *seccomp.ScmpFilter) error {
+	allowedFamilies := []uint64{
+		syscall.AF_UNIX,
+		syscall.AF_INET,
+		syscall.AF_INET6,
+	}
+
+	for _, name := range []string{"socket", "socketpair"} {
+		id, err := seccomp.GetSyscallFromName(name)
+		if err != nil {
+			continue
+		}
+		for _, fam := range allowedFamilies {
+			cond, err := seccomp.MakeCondition(0, seccomp.CompareEqual, fam)
+			if err != nil {
+				return fmt.Errorf("error building %s condition for family %d: %w", name, fam, err)
+			}
+			if err := filter.AddRuleConditional(id, seccomp.ActAllow, []seccomp.ScmpCondition{cond}); err != nil {
+				return fmt.Errorf("error allowing %s with family %d: %w", name, fam, err)
+			}
+		}
+	}
+	return nil
+}
+

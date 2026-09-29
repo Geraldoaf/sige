@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
+	"runtime"
 	"syscall"
 
 	"sige/internal/sandbox"
@@ -68,6 +70,14 @@ var internalLaunchCmd = &cobra.Command{
 
 		if err := child.Run(); err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
+				if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+					if ws.Signaled() {
+						sig := ws.Signal()
+						signal.Reset(sig)
+						_ = syscall.Kill(syscall.Getpid(), sig)
+						os.Exit(128 + int(sig))
+					}
+				}
 				os.Exit(exitErr.ExitCode())
 			}
 			fmt.Fprintf(os.Stderr, "Erro ao executar processo filho do namespace de PID: %v\n", err)
@@ -83,6 +93,9 @@ var internalLaunchNSChildCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		// Trava a goroutine na thread do SO para que alterações de capabilities,
+		// bounding set e credenciais não se percam em trocas de thread do runtime Go.
+		runtime.LockOSThread()
 
 		// Fail-closed: antes, argumentos vazios faziam este bloco ser PULADO e
 		// o comando do usuário rodava mesmo assim — sem pivot_root, sem
@@ -118,11 +131,58 @@ var internalLaunchNSChildCmd = &cobra.Command{
 			"LANG=C.UTF-8",
 			"TERM=xterm-256color",
 		}
-		err = syscall.Exec(path, append([]string{targetCmd}, targetArgs...), cleanEnv)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Erro ao executar syscall.Exec: %v\n", err)
+
+		// Inicia o processo do usuário como processo filho (PID > 1 no namespace).
+		// O processo atual (PID 1 do namespace) atua como mini-init para colher zumbis
+		// e repassar sinais ao processo do usuário, garantindo semântica POSIX padrão.
+		userCmd := exec.Command(path, targetArgs...)
+		userCmd.Stdin = os.Stdin
+		userCmd.Stdout = os.Stdout
+		userCmd.Stderr = os.Stderr
+		userCmd.Env = cleanEnv
+
+		sigChan := make(chan os.Signal, 8)
+		signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+
+		if err := userCmd.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "Erro ao iniciar processo do usuario: %v\n", err)
 			os.Exit(1)
 		}
+
+		go func() {
+			for sig := range sigChan {
+				if userCmd.Process != nil {
+					_ = userCmd.Process.Signal(sig)
+				}
+			}
+		}()
+
+		waitErr := userCmd.Wait()
+
+		// Como PID 1 do namespace, colhe quaisquer outros processos filhos órfãos
+		for {
+			var ws syscall.WaitStatus
+			p, _ := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
+			if p <= 0 {
+				break
+			}
+		}
+
+		if waitErr != nil {
+			if exitErr, ok := waitErr.(*exec.ExitError); ok {
+				if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+					if ws.Signaled() {
+						sig := ws.Signal()
+						signal.Reset(sig)
+						_ = syscall.Kill(syscall.Getpid(), sig)
+						os.Exit(128 + int(sig))
+					}
+				}
+				os.Exit(exitErr.ExitCode())
+			}
+			os.Exit(1)
+		}
+		os.Exit(0)
 	},
 }
 

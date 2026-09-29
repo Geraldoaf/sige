@@ -86,3 +86,18 @@ func TestCapacityPool_ConcurrentAccess(t *testing.T) {
 		t.Errorf("esperado 0 ativos ao final do teste concorrente, obtido %d", active)
 	}
 }
+
+func TestGlobalPool_Singleton(t *testing.T) {
+	engine.ResetGlobalPoolForTest()
+	p1 := engine.GlobalPool()
+	p2 := engine.GlobalPool()
+
+	if p1 == nil || p2 == nil {
+		t.Fatal("GlobalPool() retornou nil")
+	}
+
+	if p1 != p2 {
+		t.Errorf("esperado mesmo ponteiro de CapacityPool (singleton), obtido %p e %p", p1, p2)
+	}
+}
+

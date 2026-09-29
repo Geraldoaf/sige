@@ -244,6 +244,11 @@ func TestRealCaseAPI_AllPayloadsSuite(t *testing.T) {
 				var resp api.ExecuteResponse
 				if err := json.Unmarshal(rr.Body.Bytes(), &resp); err == nil {
 					t.Logf("[%s] OK - Mode: %s, Result: %s, ErrorType: %s", filename, resp.Mode, resp.Result, resp.ErrorType)
+					if filename == "42_forged_stderr_detection.c" {
+						if resp.Execution != nil && resp.Execution.Status == "file_size_exceeded" {
+							t.Errorf("[%s] Falha de segurança: o daemon caiu no ataque de stderr forjado e marcou file_size_exceeded!", filename)
+						}
+					}
 				}
 			}
 		})

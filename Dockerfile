@@ -31,21 +31,23 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /workspace
 
+# Cria usuário não-privilegiado sige (UID/GID 1001)
+RUN groupadd --gid 1001 sige && \
+    useradd --uid 1001 --gid sige --no-create-home --shell /bin/false sige && \
+    chown sige:sige /workspace
+
 # Binário principal do daemon
 COPY --from=builder /app/sige /opt/sige/sige
 
-# Binário auxiliar com capabilities para montagem e isolamento do sandbox
+# Binário auxiliar com capabilities restrito ao grupo sige (0750)
 RUN cp /opt/sige/sige /opt/sige/sige-launch && \
+    chown root:sige /opt/sige/sige-launch && \
+    chmod 0750 /opt/sige/sige-launch && \
     setcap cap_sys_admin,cap_setuid,cap_setgid,cap_setpcap+ep /opt/sige/sige-launch
 
 ENV SIGE_EXECUTABLE=/opt/sige/sige-launch
 
 COPY test /workspace/test
-
-# Cria usuário não-privilegiado sige (UID/GID 1001)
-RUN groupadd --gid 1001 sige && \
-    useradd --uid 1001 --gid sige --no-create-home --shell /bin/false sige && \
-    chown sige:sige /workspace
 
 # Diretório de persistência para chave de API gerada automaticamente
 RUN mkdir -p /var/lib/sige && chown sige:sige /var/lib/sige && chmod 0700 /var/lib/sige

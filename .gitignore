@@ -29,3 +29,7 @@ flake.lock
 # Secrets — nunca commitar
 secrets/
 .claude/
+docs
+test/__pycache__/verify_pool_saturation.cpython-314.pyc
+test/__pycache__/verify_fixes_api.cpython-314.pyc
+test/__pycache__/verify_multieval_cancel.cpython-314.pyc

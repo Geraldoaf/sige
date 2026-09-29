@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -12,7 +13,16 @@ import (
 var (
 	// ErrPoolSaturated indica que todos os slots de sandbox estão ocupados e o timeout esgotou.
 	ErrPoolSaturated = errors.New("capacidade máxima de sandboxes atingida: timeout de espera na fila esgotado")
+
+	globalPool     *CapacityPool
+	globalPoolOnce sync.Once
 )
+
+// ResetGlobalPoolForTest permite reinicializar o pool em testes de unidade.
+func ResetGlobalPoolForTest() {
+	globalPoolOnce = sync.Once{}
+	globalPool = nil
+}
 
 // CapacityPool gerencia a concorrência global de sandboxes no servidor.
 type CapacityPool struct {
@@ -37,15 +47,18 @@ func NewCapacityPool(maxSlots int, queueWait time.Duration) *CapacityPool {
 	}
 }
 
-// GlobalPool inicializa o pool lendo SIGE_MAX_CONCURRENT_SANDBOXES.
+// GlobalPool inicializa o pool lendo SIGE_MAX_CONCURRENT_SANDBOXES de forma singleton.
 func GlobalPool() *CapacityPool {
-	slots := 8
-	if v := os.Getenv("SIGE_MAX_CONCURRENT_SANDBOXES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			slots = n
+	globalPoolOnce.Do(func() {
+		slots := 8
+		if v := os.Getenv("SIGE_MAX_CONCURRENT_SANDBOXES"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				slots = n
+			}
 		}
-	}
-	return NewCapacityPool(slots, 5*time.Second)
+		globalPool = NewCapacityPool(slots, 5*time.Second)
+	})
+	return globalPool
 }
 
 // Acquire tenta obter um slot no pool. Se o timeout de espera expirar ou o ctx for cancelado, retorna ErrPoolSaturated.

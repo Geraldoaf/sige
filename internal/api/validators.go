@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sige/internal/config"
+	"strconv"
 	"strings"
 )
 
@@ -81,8 +82,29 @@ func validateRequest(req *ExecuteRequest, apiMode string) error {
 		}
 	}
 
-	if req.CPU != "" && !cpuQuotaRe.MatchString(strings.TrimSpace(req.CPU)) {
-		return errors.New("Field 'cpu' must be a percentage (e.g. '10' or '10%') or cgroup format (e.g. '10000 100000')")
+	if req.CPU != "" {
+		trimmedCPU := strings.TrimSpace(req.CPU)
+		if !cpuQuotaRe.MatchString(trimmedCPU) {
+			return errors.New("Field 'cpu' must be a percentage (e.g. '10' or '10%') or cgroup format (e.g. '10000 100000')")
+		}
+		parts := strings.Fields(trimmedCPU)
+		if len(parts) == 2 {
+			quota, _ := strconv.Atoi(parts[0])
+			period, _ := strconv.Atoi(parts[1])
+			if quota < 1000 || period < 1000 || period > 1000000 {
+				return errors.New("Field 'cpu' format 'quota period' requires quota >= 1000 and period between 1000 and 1000000 microseconds")
+			}
+		} else if strings.HasSuffix(trimmedCPU, "%") {
+			pct, _ := strconv.Atoi(strings.TrimSuffix(trimmedCPU, "%"))
+			if pct <= 0 || pct > 10000 {
+				return errors.New("Field 'cpu' percentage must be positive and reasonable (e.g. 1% to 1000%)")
+			}
+		} else {
+			pct, err := strconv.Atoi(trimmedCPU)
+			if err == nil && (pct <= 0 || pct > 10000) {
+				return errors.New("Field 'cpu' value must be positive (e.g. 1 to 1000)")
+			}
+		}
 	}
 
 	switch apiMode {

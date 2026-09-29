@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,7 +58,11 @@ func announceAPIKey() {
 	}
 
 	if defaultKeyProvider.IsGenerated() {
-		fmt.Fprintf(os.Stdout, "[SIGE] API Key gerada: %s\n", key)
+		masked := key
+		if len(key) >= 8 {
+			masked = key[:4] + "..." + key[len(key)-4:]
+		}
+		fmt.Fprintf(os.Stdout, "[SIGE] API Key gerada e armazenada em arquivo: %s\n", masked)
 	} else {
 		masked := key
 		if len(key) >= 8 {
@@ -207,7 +213,8 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 
 	defaultCfg, err := config.Resolve("config.json")
 	if err != nil {
-		presenter.RenderError(w, http.StatusInternalServerError, "CONFIG_ERROR", "Server error: invalid configuration: "+err.Error(), nil)
+		log.Printf("[SIGE] Erro ao resolver configuracao: %v", err)
+		presenter.RenderError(w, http.StatusInternalServerError, "CONFIG_ERROR", "Internal server error: configuration failure", nil)
 		return
 	}
 
@@ -233,7 +240,10 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 
 	resolvedMem, resolvedCPU, resolvedTimeout, resolvedTmpLimit, resolvedFileSize, resolvedOpenFiles := resolveLimits(&req, &defaultCfg, apiMode)
 
-	execID := fmt.Sprintf("exec-%d-%d", time.Now().UnixNano(), os.Getpid())
+	randomBytes := make([]byte, 6)
+	_, _ = rand.Read(randomBytes)
+	execID := fmt.Sprintf("exec-%d-%s", time.Now().UnixNano(), hex.EncodeToString(randomBytes))
+
 	command, args, workspace, cleanup, err := prepareWorkspace(&req, execID)
 	if err != nil {
 		if errors.Is(err, sandbox.ErrAtCapacity) {
@@ -267,7 +277,8 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 			handlers.RecordExecution("compilation_error")
 			return
 		}
-		presenter.RenderError(w, http.StatusInternalServerError, "WORKSPACE_ERROR", "Error preparing temporary workspace: "+err.Error(), nil)
+		log.Printf("[SIGE] Erro ao preparar workspace: %v", err)
+		presenter.RenderError(w, http.StatusInternalServerError, "WORKSPACE_ERROR", "Internal server error: failed to prepare execution workspace", nil)
 		return
 	}
 	defer cleanup()
@@ -284,7 +295,7 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 			MaxOpenFiles:  resolvedOpenFiles,
 			Stdin:         stdinInput,
 		}
-		return sandbox.Execute(cfg, command, args)
+		return sandbox.ExecuteContext(r.Context(), cfg, command, args)
 	}
 
 	var response ExecuteResponse
@@ -302,6 +313,12 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 		status = response.Execution.Status
 	}
 	handlers.RecordExecution(status)
+
+	if status == "at_capacity" || response.ErrorType == "at_capacity" {
+		w.Header().Set("Retry-After", "30")
+		presenter.RenderError(w, http.StatusServiceUnavailable, "AT_CAPACITY", "Server at capacity: too many sandboxes running, retry shortly.", nil)
+		return
+	}
 
 	presenter.RenderJSON(w, http.StatusOK, response)
 }

@@ -102,3 +102,14 @@ func TestAllowlistSemDuplicatas(t *testing.T) {
 		visto[name] = true
 	}
 }
+
+// TestSocketSyscallsNotUnconditional garante que socket e socketpair nunca voltem
+// para a allowlist incondicional, pois precisam de checagem estrita de família (AF_UNIX, AF_INET).
+func TestSocketSyscallsNotUnconditional(t *testing.T) {
+	for _, name := range allowedSyscalls {
+		if name == "socket" || name == "socketpair" {
+			t.Errorf("syscall %s não pode estar na allowlist incondicional", name)
+		}
+	}
+}
+
