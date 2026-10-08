@@ -10,7 +10,7 @@ import (
 
 func TestRenderError(t *testing.T) {
 	rr := httptest.NewRecorder()
-	presenter.RenderError(rr, http.StatusBadRequest, "INVALID_INPUT", "Campo obrigatório ausente", map[string]any{"field": "language"})
+	presenter.RenderError(rr, http.StatusBadRequest, "INVALID_INPUT", "Missing required field", map[string]any{"field": "language"})
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("esperado status 400, obtido %d", rr.Code)

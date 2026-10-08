@@ -84,7 +84,7 @@ func (l *IPRateLimiter) Middleware() func(http.Handler) http.Handler {
 			l.mu.Unlock()
 
 			if !allowed {
-				presenter.RenderError(w, http.StatusTooManyRequests, "TOO_MANY_REQUESTS", "Taxa limite de requisições por segundo excedida", nil)
+				presenter.RenderError(w, http.StatusTooManyRequests, "TOO_MANY_REQUESTS", "Rate limit exceeded: too many requests per second", nil)
 				return
 			}
 

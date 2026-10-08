@@ -8,7 +8,7 @@ import (
 
 // ErrAtCapacity indica que o servidor já está com o número máximo de
 // sandboxes em execução e a espera por uma vaga esgotou.
-var ErrAtCapacity = errors.New("servidor na capacidade máxima de sandboxes simultâneos")
+var ErrAtCapacity = errors.New("server at maximum capacity of concurrent sandboxes")
 
 // acquireSlot reserva uma vaga global de execução utilizando o engine.GlobalPool().
 func acquireSlot() (func(), error) {

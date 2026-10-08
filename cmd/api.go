@@ -18,17 +18,17 @@ func init() {
 
 var apiCmd = &cobra.Command{
 	Use:   "api",
-	Short: "Inicia o servidor HTTP da API",
+	Short: "Starts the HTTP API server",
 	Run: func(cmd *cobra.Command, args []string) {
 		// Valida configuração na inicialização
 		if _, err := config.Resolve("config.json"); err != nil {
-			fmt.Fprintf(os.Stderr, "[sige] Erro de configuração: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[sige] Configuration error: %v\n", err)
 			os.Exit(1)
 		}
 
 		bootstrapPrivileged()
 
-		fmt.Fprintf(os.Stderr, "[sige] Iniciando servidor na porta %s...\n", apiPort)
+		fmt.Fprintf(os.Stderr, "[sige] Starting server on port %s...\n", apiPort)
 		api.StartServer(apiPort)
 	},
 }

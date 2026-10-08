@@ -12,7 +12,7 @@ import (
 
 var (
 	// ErrPoolSaturated indica que todos os slots de sandbox estão ocupados e o timeout esgotou.
-	ErrPoolSaturated = errors.New("capacidade máxima de sandboxes atingida: timeout de espera na fila esgotado")
+	ErrPoolSaturated = errors.New("maximum sandbox capacity reached: queue wait timeout exceeded")
 
 	globalPool     *CapacityPool
 	globalPoolOnce sync.Once

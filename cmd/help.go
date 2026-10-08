@@ -13,8 +13,8 @@ var cliInput string
 
 var rootCmd = &cobra.Command{
 	Use:   "sige",
-	Short: "SIGE - Sistema de Isolamento e Gerenciamento de Execução",
-	Long:  `SIGE: Sandbox segura para execução de código não confiável via cgroups v2, namespaces e seccomp.`,
+	Short: "SIGE - Execution Isolation and Management System",
+	Long:  `SIGE: Secure sandbox for executing untrusted code via cgroups v2, namespaces, and seccomp.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if cliInput != "" {
 			cli.Run(cliInput)

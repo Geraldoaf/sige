@@ -40,7 +40,7 @@ var internalLaunchCmd = &cobra.Command{
 
 		self, err := os.Executable()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Erro ao obter caminho do executável: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error obtaining executable path: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -80,7 +80,7 @@ var internalLaunchCmd = &cobra.Command{
 				}
 				os.Exit(exitErr.ExitCode())
 			}
-			fmt.Fprintf(os.Stderr, "Erro ao executar processo filho do namespace de PID: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error executing PID namespace child process: %v\n", err)
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -102,12 +102,12 @@ var internalLaunchNSChildCmd = &cobra.Command{
 		// rlimits, sem esvaziar o bounding set e sem rebaixar para nobody.
 		// Isolamento não pode ser opcional: sem os caminhos, aborta.
 		if rootfs == "" || workspace == "" {
-			fmt.Fprintln(os.Stderr, "Erro: --rootfs e --workspace são obrigatórios; recusando executar sem isolamento.")
+			fmt.Fprintln(os.Stderr, "Error: --rootfs and --workspace are required; refusing to execute without isolation.")
 			os.Exit(1)
 		}
 
 		if err := sandbox.ConfigureSandboxNamespace(rootfs, workspace, tmpLimitMB, fileLimitMB, nofileLimit, workspaceWritable); err != nil {
-			fmt.Fprintf(os.Stderr, "Erro ao configurar namespaces do sandbox: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error configuring sandbox namespaces: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -116,12 +116,12 @@ var internalLaunchNSChildCmd = &cobra.Command{
 
 		path, err := exec.LookPath(targetCmd)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Comando não encontrado no sandbox: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Command not found in sandbox: %v\n", err)
 			os.Exit(1)
 		}
 
 		if err := sandbox.ApplySeccompFilter(); err != nil {
-			fmt.Fprintf(os.Stderr, "Erro ao aplicar filtro Seccomp: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error applying seccomp filter: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -145,7 +145,7 @@ var internalLaunchNSChildCmd = &cobra.Command{
 		signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 
 		if err := userCmd.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "Erro ao iniciar processo do usuario: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error starting user process: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -187,20 +187,20 @@ var internalLaunchNSChildCmd = &cobra.Command{
 }
 
 func init() {
-	internalLaunchCmd.Flags().IntVar(&syncFd, "sync-fd", -1, "File descriptor para sincronização")
-	internalLaunchCmd.Flags().StringVar(&rootfs, "rootfs", "", "Caminho do rootfs temporário para o sandbox")
-	internalLaunchCmd.Flags().StringVar(&workspace, "workspace", "", "Diretório de trabalho a ser montado no sandbox")
-	internalLaunchCmd.Flags().IntVar(&tmpLimitMB, "tmp-limit", 64, "Limite de tamanho para /tmp em MB")
-	internalLaunchCmd.Flags().IntVar(&fileLimitMB, "file-limit", 15, "Limite de tamanho máximo para arquivos gerados em MB")
-	internalLaunchCmd.Flags().IntVar(&nofileLimit, "nofile-limit", 256, "Limite de quantidade máxima de arquivos/soquetes abertos")
-	internalLaunchCmd.Flags().BoolVar(&workspaceWritable, "workspace-writable", false, "Monta /workspace como leitura-escrita (só para compilação)")
+	internalLaunchCmd.Flags().IntVar(&syncFd, "sync-fd", -1, "File descriptor for synchronization")
+	internalLaunchCmd.Flags().StringVar(&rootfs, "rootfs", "", "Temporary rootfs path for the sandbox")
+	internalLaunchCmd.Flags().StringVar(&workspace, "workspace", "", "Working directory to mount in the sandbox")
+	internalLaunchCmd.Flags().IntVar(&tmpLimitMB, "tmp-limit", 64, "Size limit for /tmp in MB")
+	internalLaunchCmd.Flags().IntVar(&fileLimitMB, "file-limit", 15, "Maximum file size limit in MB")
+	internalLaunchCmd.Flags().IntVar(&nofileLimit, "nofile-limit", 256, "Maximum open files/sockets limit")
+	internalLaunchCmd.Flags().BoolVar(&workspaceWritable, "workspace-writable", false, "Mount /workspace as read-write (compilation only)")
 	rootCmd.AddCommand(internalLaunchCmd)
 
-	internalLaunchNSChildCmd.Flags().StringVar(&rootfs, "rootfs", "", "Caminho do rootfs temporário para o sandbox")
-	internalLaunchNSChildCmd.Flags().StringVar(&workspace, "workspace", "", "Diretório de trabalho a ser montado no sandbox")
-	internalLaunchNSChildCmd.Flags().IntVar(&tmpLimitMB, "tmp-limit", 64, "Limite de tamanho para /tmp em MB")
-	internalLaunchNSChildCmd.Flags().IntVar(&fileLimitMB, "file-limit", 15, "Limite de tamanho máximo para arquivos gerados em MB")
-	internalLaunchNSChildCmd.Flags().IntVar(&nofileLimit, "nofile-limit", 256, "Limite de quantidade máxima de arquivos/soquetes abertos")
-	internalLaunchNSChildCmd.Flags().BoolVar(&workspaceWritable, "workspace-writable", false, "Monta /workspace como leitura-escrita (só para compilação)")
+	internalLaunchNSChildCmd.Flags().StringVar(&rootfs, "rootfs", "", "Temporary rootfs path for the sandbox")
+	internalLaunchNSChildCmd.Flags().StringVar(&workspace, "workspace", "", "Working directory to mount in the sandbox")
+	internalLaunchNSChildCmd.Flags().IntVar(&tmpLimitMB, "tmp-limit", 64, "Size limit for /tmp in MB")
+	internalLaunchNSChildCmd.Flags().IntVar(&fileLimitMB, "file-limit", 15, "Maximum file size limit in MB")
+	internalLaunchNSChildCmd.Flags().IntVar(&nofileLimit, "nofile-limit", 256, "Maximum open files/sockets limit")
+	internalLaunchNSChildCmd.Flags().BoolVar(&workspaceWritable, "workspace-writable", false, "Mount /workspace as read-write (compilation only)")
 	rootCmd.AddCommand(internalLaunchNSChildCmd)
 }

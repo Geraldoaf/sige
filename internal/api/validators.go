@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"regexp"
 	"sige/internal/config"
+	"sige/internal/sandbox"
 	"strconv"
 	"strings"
 )
 
 // Limites máximos por campo da requisição
 const (
+	maxFilesCount          = 50
+	maxTotalFilesBytes     = 10 << 20 // 10MB total de arquivos
 	maxTestCases           = 20
 	maxCodeBytes           = 1 << 20 // 1MB de código-fonte
 	maxFileBase64Bytes     = 1 << 21 // 2MB em base64
@@ -25,6 +28,20 @@ var cpuQuotaRe = regexp.MustCompile(`^(\d+%?|\d+\s+\d+)$`)
 
 // validateSizes verifica se os tamanhos dos campos da requisição respeitam os limites permitidos.
 func validateSizes(req *ExecuteRequest) error {
+	if len(req.Files) > maxFilesCount {
+		return fmt.Errorf("Too many files in 'files': maximum allowed is %d.", maxFilesCount)
+	}
+	var totalFilesBytes int
+	for i, f := range req.Files {
+		totalFilesBytes += len(f.Content) + len(f.ContentBase64)
+		if len(f.Name) > maxFilenameBytes {
+			return fmt.Errorf("Filename of files[%d] is too long: maximum allowed is %d bytes.", i, maxFilenameBytes)
+		}
+	}
+	if totalFilesBytes > maxTotalFilesBytes {
+		return fmt.Errorf("Total size of 'files' is too large: maximum allowed is %d bytes.", maxTotalFilesBytes)
+	}
+
 	if len(req.Code) > maxCodeBytes {
 		return fmt.Errorf("Field 'code' is too large: maximum allowed is %d bytes.", maxCodeBytes)
 	}
@@ -64,22 +81,45 @@ func validateRequest(req *ExecuteRequest, apiMode string) error {
 		return fmt.Errorf("Field 'language' is unsupported: '%s'. Supported languages: python, bash, c, cpp", req.Language)
 	}
 
-	if req.Code == "" && req.FileBase64 == "" {
-		return errors.New("You must provide code in 'code' or a base64 file in 'file_base64'")
+	if len(req.Files) == 0 && req.Code == "" && req.FileBase64 == "" {
+		return errors.New("You must provide code in 'code', 'file_base64', or a list of files in 'files'")
 	}
 
 	if err := validateSizes(req); err != nil {
 		return err
 	}
 
-	if req.Filename != "" && !isSafeFilename(req.Filename) {
-		return errors.New("Field 'filename' is invalid: only letters, digits, '.', '-' and '_' are allowed")
+	if len(req.Files) == 0 {
+		if req.Filename != "" && !sandbox.IsSafeFilename(req.Filename) {
+			return errors.New("Field 'filename' is invalid: only letters, digits, '.', '-' and '_' are allowed")
+		}
+	} else {
+		for i, f := range req.Files {
+			if !sandbox.IsSafeRelativePath(f.Name) {
+				return fmt.Errorf("Field 'files[%d].name' is invalid: only safe relative paths without '..' are allowed", i)
+			}
+			if f.Content == "" && f.ContentBase64 == "" {
+				return fmt.Errorf("Field 'files[%d]' must contain 'content' or 'content_base64'", i)
+			}
+			if f.ContentBase64 != "" {
+				if _, err := base64.StdEncoding.DecodeString(f.ContentBase64); err != nil {
+					return fmt.Errorf("Field 'files[%d].content_base64' is not valid base64: %v", i, err)
+				}
+			}
+		}
+		if err := sandbox.ValidateFileEntries(req.Language, req.Files, req.Filename); err != nil {
+			return err
+		}
 	}
 
 	if req.FileBase64 != "" {
 		if _, err := base64.StdEncoding.DecodeString(req.FileBase64); err != nil {
 			return fmt.Errorf("Field 'file_base64' is not valid base64: %v", err)
 		}
+	}
+
+	if err := sandbox.ValidateCompileFlags(req.Language, req.GetCompileFlags()); err != nil {
+		return err
 	}
 
 	if req.CPU != "" {

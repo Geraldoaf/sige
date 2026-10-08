@@ -9,7 +9,7 @@ import (
 
 var verifyCgroupsCmd = &cobra.Command{
 	Use:   "cgroups-version",
-	Short: "Verifica a versão do cgroups no sistema",
+	Short: "Verifies system cgroups version",
 	Run: func(cmd *cobra.Command, args []string) {
 		mode := cgroups.GetCgroupsMode()
 		fmt.Printf("cgroup version: %s\n", mode)

@@ -1,18 +1,30 @@
 package api
 
+import "sige/internal/sandbox"
+
+// FileEntry é um alias para sandbox.FileEntry garantindo compatibilidade entre os pacotes.
+type FileEntry = sandbox.FileEntry
+
+// CompileFlags é um alias para sandbox.CompileFlags permitindo deserialização flexível de flags.
+type CompileFlags = sandbox.CompileFlags
+
 type TestCase struct {
 	Stdin          string `json:"stdin"`
 	ExpectedStdout string `json:"expected_stdout"`
 }
 
 type ExecuteRequest struct {
-	Language       string     `json:"language"`
-	Code           string     `json:"code"`
-	FileBase64     string     `json:"file_base64"`
-	Filename       string     `json:"filename"`
-	Stdin          string     `json:"stdin"`
-	ExpectedStdout string     `json:"expected_stdout"`
-	TestCases      []TestCase `json:"test_cases"`
+	Language       string       `json:"language"`
+	Files          []FileEntry  `json:"files,omitempty"`
+	Code           string       `json:"code,omitempty"`
+	FileBase64     string       `json:"file_base64,omitempty"`
+	Filename       string       `json:"filename,omitempty"`
+	CompileFlags   CompileFlags `json:"compile_flags,omitempty"`
+	CompilerFlags  CompileFlags `json:"compiler_flags,omitempty"`
+	Flags          CompileFlags `json:"flags,omitempty"`
+	Stdin          string       `json:"stdin"`
+	ExpectedStdout string       `json:"expected_stdout"`
+	TestCases      []TestCase   `json:"test_cases"`
 
 	MemoryMB      int64  `json:"memory_mb"`
 	CPU           string `json:"cpu"`
@@ -20,6 +32,16 @@ type ExecuteRequest struct {
 	TmpLimitMB    int    `json:"tmp_limit_mb"`
 	MaxFileSizeMB int    `json:"max_file_size_mb"`
 	MaxOpenFiles  int    `json:"max_open_files"`
+}
+
+func (r *ExecuteRequest) GetCompileFlags() []string {
+	if len(r.CompileFlags) > 0 {
+		return r.CompileFlags
+	}
+	if len(r.CompilerFlags) > 0 {
+		return r.CompilerFlags
+	}
+	return r.Flags
 }
 
 type GraderExecution struct {

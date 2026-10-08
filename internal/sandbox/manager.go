@@ -51,7 +51,7 @@ func ExecuteContext(ctx context.Context, config Config, command string, args []s
 	// Garante o encerramento dos processos e limpeza do cgroup ao finalizar
 	defer func() {
 		if err := cgroups.KillAndDeleteCgroup(config.Name); err != nil {
-			fmt.Fprintf(os.Stderr, "[SIGE] Aviso: falha ao limpar cgroup da execução: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[SIGE] Warning: failed to clean up execution cgroup: %v\n", err)
 		}
 	}()
 

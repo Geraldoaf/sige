@@ -96,7 +96,7 @@ func applyEnvOverrides(cfg *DefaultConfig) error {
 		}
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return fmt.Errorf("%s inválido (%q): deve ser um número inteiro", f.env, v)
+			return fmt.Errorf("invalid %s (%q): must be an integer", f.env, v)
 		}
 		*f.dst = n
 	}
@@ -115,7 +115,7 @@ func applyEnvOverrides(cfg *DefaultConfig) error {
 		}
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
-			return fmt.Errorf("%s inválido (%q): deve ser um número inteiro", f.env, v)
+			return fmt.Errorf("invalid %s (%q): must be an integer", f.env, v)
 		}
 		*f.dst = n
 	}

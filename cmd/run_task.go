@@ -28,7 +28,7 @@ var runTaskCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		defaultCfg, err := config.Resolve("config.json")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Erro de configuração: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
 			os.Exit(1)
 		}
 

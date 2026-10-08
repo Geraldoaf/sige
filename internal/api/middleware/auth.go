@@ -13,13 +13,13 @@ func AuthMiddleware(provider auth.KeyProvider) func(http.Handler) http.Handler {
 			expectedKey := provider.ResolveKey()
 			if expectedKey == "" && !provider.Validate("") {
 				presenter.RenderError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE",
-					"Servidor malconfigurado: nenhuma chave de API foi fornecida ou configurada", nil)
+					"Server misconfigured: no API key provided or configured", nil)
 				return
 			}
 
 			providedKey := r.Header.Get("X-API-Key")
 			if !provider.Validate(providedKey) {
-				presenter.RenderError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Não autorizado: chave X-API-Key ausente ou inválida", nil)
+				presenter.RenderError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Unauthorized: missing or invalid X-API-Key header", nil)
 				return
 			}
 

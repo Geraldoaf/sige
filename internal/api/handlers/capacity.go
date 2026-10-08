@@ -10,7 +10,7 @@ import (
 // HandleCapacity retorna o status da fila de concorrência e ocupação dos sandboxes.
 func HandleCapacity(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		presenter.RenderError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Método HTTP não permitido", nil)
+		presenter.RenderError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "HTTP method not allowed", nil)
 		return
 	}
 

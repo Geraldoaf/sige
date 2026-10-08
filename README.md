@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <strong>Motor autônomo de julgamento de código não confiável (Online Judge / Code Runner Engine) de altíssimo desempenho e isolamento hermético.</strong><br />
+  <strong>Motor autônomo de julgamento de código não confiável (Online Judge / Code Runner Engine).</strong><br />
   Combina a velocidade de instanciar sandboxes via chamadas nativas do kernel Linux (<code>cgroups v2</code>, <code>namespaces</code>, <code>pivot_root</code>, <code>seccomp BPF</code>) com uma arquitetura estrita de defesa em profundidade em múltiplas camadas.
 </p>
 
@@ -45,12 +45,13 @@
   - [Execução: POST /execute](#execução-post-execute)
   - [Exemplos Práticos por Modo](#exemplos-práticos-por-modo)
   - [Exemplo com Código em Base64 (file_base64)](#exemplo-com-código-em-base64-file_base64)
+  - [Projetos Multi-Arquivo e Compilação Multi-Módulo (files)](#projetos-multi-arquivo-e-compilação-multi-módulo-files)
   - [Referência de Parâmetros e Status](#referência-de-parâmetros-e-status)
 - [Variáveis de Ambiente](#-variáveis-de-ambiente)
 - [Estrutura de Pastas](#-estrutura-de-pastas)
 - [Testes e Engenharia de Segurança](#-testes-e-engenharia-de-segurança)
   - [Testes Unitários com Bypass Gracioso](#testes-unitários-com-bypass-gracioso)
-  - [Suíte Adversarial de Testes Reais (39 Casos)](#suíte-adversarial-de-testes-reais-testreal_cases)
+  - [Suíte Adversarial de Testes Reais (48 Casos)](#suíte-adversarial-de-testes-reais-testreal_cases)
   - [Rastreabilidade e Imunidade a CVEs Críticas (Judge0)](#-rastreabilidade-e-imunidade-a-cves-críticas-judge0)
   - [Análise Estática de Vulnerabilidades](#análise-estática-de-vulnerabilidades)
 - [Como Contribuir](#-como-contribuir)
@@ -60,7 +61,7 @@
 
 ## 📖 Sobre o Projeto
 
-O **SIGE** é um motor de execução e correção automatizada de código (*Code Runner / Online Judge Engine*) desenvolvido em Go. Foi concebido para atender plataformas de ensino de programação, sistemas de submissão de maratonas (como Codeforces e Beecrowd) e esteiras que demandem execução de código de terceiros com latência em milissegundos e blindagem absoluta contra ataques ao hospedeiro.
+O **SIGE** é um motor de execução e correção automatizada de código (*Code Runner / Online Judge Engine*) desenvolvido em Go. Foi concebido para atender plataformas de ensino de programação, sistemas de submissão de maratonas (como Codeforces e Beecrowd) e esteiras que demandem execução de código de terceiros com latência em milissegundos e blindagem contra ataques ao hospedeiro.
 
 ### O Desafio de Executar Código Não Confiável
 
@@ -216,16 +217,16 @@ Para uma comparação transparente e técnica, relacionamos abaixo os principais
 - **Filtro Seccomp BPF (Modo Allowlist):** Filtro de chamadas de sistema restritivo. Tentativas de invocação de chamadas perigosas como `unshare`, `ptrace`, `reboot`, `mount` ou criação de namespaces não autorizados provocam o encerramento do processo no ato pelo kernel (`SIGSYS` / `ActKillProcess`).
 - **Privilégios Mínimos:** Todo código é rebaixado antes da execução para o usuário não-privilegiado `nobody` (UID/GID `65534`) e todas as *Linux Capabilities* são limpas (`NoNewPrivs`).
 
-### 2. Ciclo de Compilação Segura (C e C++)
+### 2. Ciclo de Compilação Segura e Projetos Multi-Arquivo (C, C++ e Python)
 
-Códigos em C e C++ passam por um ciclo de execução em **duas etapas totalmente segregadas**:
+Códigos em C e C++ (tanto arquivo único quanto projetos multi-módulo via `files`) passam por um ciclo de execução em **duas etapas totalmente segregadas**:
 
-1. **Etapa 1 (Compilação Confinada):** O compilador (`gcc` ou `g++`) é executado **dentro de um sandbox próprio e isolado**, com limites dedicados:
+1. **Etapa 1 (Compilação Confinada Multi-Módulo):** O compilador (`gcc` ou `g++`) é executado **dentro de um sandbox próprio e isolado**, compilando todos os arquivos-fonte (`.c`, `.cpp`, `.cc`, `.cxx`) apenas com as flags essenciais (`-I/workspace` e `-o /workspace/solution`, sem otimizações forçadas) além das `compile_flags` opcionais do usuário, sob limites dedicados:
    - **RAM:** 256 MB
    - **Tempo de CPU:** 10 segundos
    - **Espaço temporário (`/tmp`):** 64 MB
    - *Proteção:* Ataques baseados em inclusão recursiva de cabeçalhos (*preprocessor bombs*) ou consumo abusivo de templates C++ são contidos e resultam em `compilation_error` sem afetar a saúde da API.
-2. **Etapa 2 (Execução da Solução):** O binário compilado resultante (`/workspace/solution`) é executado em um **segundo sandbox**, sujeito aos limites solicitados na requisição (ou padrões do servidor).
+2. **Etapa 2 (Execução da Solução em Workspace Read-Only):** Após a compilação, as permissões do workspace e subdiretórios são reduzidas para `0755` (permitindo leitura e `import` de pacotes Python sob `nobody`, mas impedindo escrita no nível de inode) e o diretório `/workspace` é remontado com `MS_RDONLY`. O binário compilado (`/workspace/solution`) é então executado em um **segundo sandbox**, sujeito aos limites solicitados na requisição (ou padrões do servidor).
 
 ### 3. Modos de Avaliação da API REST
 - **Modo `interpreter`:** Execução direta com limites padrão globais. Retorna saídas brutas (`stdout`, `stderr`), código de término (`exit_code`), tempo de CPU decorrido e pico de memória física consumida.
@@ -590,6 +591,112 @@ curl -X POST http://127.0.0.1:8080/execute \
 
 ---
 
+### Projetos Multi-Arquivo e Compilação Multi-Módulo (`files`)
+
+O SIGE suporta o envio de múltiplos arquivos e estruturas de diretórios (até 50 arquivos e profundidade máxima de 10 níveis) através do campo `files`. Cada item do array pode fornecer `content` (texto plano) ou `content_base64` (codificado em Base64).
+
+#### 1. Projeto C com Múltiplos `.c` e `.h` em Subpastas (`test/real_cases/48_multifile_c_project`)
+
+Em C e C++, todos os arquivos-fonte (`.c`, `.cpp`, `.cc`, `.cxx`) presentes em `files` são compilados conjuntamente dentro do sandbox de compilação com `-I/workspace` (e quaisquer `compile_flags` fornecidas, como `-lm`):
+
+```bash
+curl -X POST http://127.0.0.1:8080/execute \
+  -H "X-API-Key: SUA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "language": "c",
+    "compile_flags": ["-lm"],
+    "files": [
+      {
+        "name": "main.c",
+        "content": "#include <stdio.h>\n#include \"include/geometry.h\"\n#include \"include/stats.h\"\nint main(void) {\n    Point2D tri[3] = {{0,0}, {3,0}, {0,4}};\n    double data[4] = {2.0, 4.0, 6.0, 8.0};\n    printf(\"PERIM=%.2f MEAN=%.2f\\n\", polygon_perimeter(tri, 3), array_mean(data, 4));\n    return 0;\n}\n"
+      },
+      {
+        "name": "include/geometry.h",
+        "content": "#ifndef GEOMETRY_H\n#define GEOMETRY_H\ntypedef struct { double x; double y; } Point2D;\ndouble point_distance(Point2D a, Point2D b);\ndouble polygon_perimeter(const Point2D *pts, int n);\n#endif\n"
+      },
+      {
+        "name": "include/stats.h",
+        "content": "#ifndef STATS_H\n#define STATS_H\ndouble array_mean(const double *values, int n);\n#endif\n"
+      },
+      {
+        "name": "src/geometry.c",
+        "content": "#include <math.h>\n#include \"include/geometry.h\"\ndouble point_distance(Point2D a, Point2D b) { return hypot(b.x - a.x, b.y - a.y); }\ndouble polygon_perimeter(const Point2D *pts, int n) {\n    double total = 0.0;\n    for (int i = 0; i < n; i++) total += point_distance(pts[i], pts[(i + 1) % n]);\n    return total;\n}\n"
+      },
+      {
+        "name": "src/stats.c",
+        "content": "#include \"include/stats.h\"\ndouble array_mean(const double *values, int n) {\n    double s = 0.0;\n    for (int i = 0; i < n; i++) s += values[i];\n    return s / (double)n;\n}\n"
+      }
+    ]
+  }'
+```
+
+**Resposta:**
+```json
+{
+  "mode": "interpreter",
+  "result": "completed",
+  "passed_count": 1,
+  "total_count": 1,
+  "execution": {
+    "stdout": "PERIM=12.00 MEAN=5.00\n",
+    "stderr": "",
+    "duration_ms": 13,
+    "exit_code": 0,
+    "status": "success"
+  }
+}
+```
+
+#### 2. Compilação C/C++ com Flags Customizadas (`compile_flags`)
+
+Você pode passar flags adicionais para o compilador (`gcc` ou `g++`) utilizando o campo `compile_flags` (ou seus aliases `compiler_flags` / `flags`), tanto como um array de strings quanto como uma string com flags separadas por espaço:
+
+```bash
+curl -X POST http://127.0.0.1:8080/execute \
+  -H "X-API-Key: SUA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "language": "c",
+    "code": "#include <stdio.h>\n#ifdef DEBUG\n#define MSG \"MODO_DEBUG\"\n#else\n#define MSG \"PRODUCAO\"\n#endif\nint main(void) { printf(\"BUILD=%s\\n\", MSG); return 0; }\n",
+    "compile_flags": ["-O3", "-std=c11", "-Wall", "-DDEBUG"]
+  }'
+```
+
+*Nota:* Flags que tentam desviar o binário de saída (`-o`, `--output`, `-Wl,-o`), suprimir a geração do executável (`-c`, `-S`, `-E`), carregar plugins/specs arbitrários (`-fplugin`, `-specs`, `-wrapper`, `-B`), incluir/gravar arquivos arbitrários (`-include`, `-imacros`, `-MF`, `-MD`, `-save-temps`) ou usar response files (`@arquivo`) são bloqueadas por validação para garantir a integridade da compilação.
+
+#### 3. Projeto Python com Pacotes em Subdiretórios e Entrypoint Customizado (`filename`)
+
+Para linguagens interpretadas (`python`, `bash`), o ponto de entrada padrão é o primeiro item de `files` (`files[0].name`), ou o caminho relativo especificado em `filename`:
+
+```bash
+curl -X POST http://127.0.0.1:8080/execute \
+  -H "X-API-Key: SUA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "language": "python",
+    "filename": "src/app.py",
+    "files": [
+      {
+        "name": "src/app.py",
+        "content": "import sys\nsys.path.insert(0, \"/workspace\")\nfrom pkg.calc import somar\nprint(f\"RESULT={somar(15, 27)}\")\n"
+      },
+      {
+        "name": "pkg/calc.py",
+        "content": "def somar(a, b):\n    return a + b\n"
+      }
+    ]
+  }'
+```
+
+#### Regras de Segurança e Validação Estrutural para `files`
+- **Bloqueio de Path Traversal:** Caminhos contendo `..`, barras iniciais (`/`, `\`), barras duplas (`//`) ou bytes nulos são rejeitados com `400 Bad Request`.
+- **Proteção contra Argument/Flag Injection:** Nomes de arquivos ou diretórios iniciados com hífen (`-`, ex.: `-fplugin=evil.so.c`) são bloqueados para impedir injeção de flags no compilador/interpretador.
+- **Prevenção de Colisões e Duplicatas:** Caminhos duplicados (`["main.c", "main.c"]`), colisões entre arquivo e diretório (`["pkg", "pkg/mod.py"]`) e o uso do nome reservado do binário (`solution` ou `solution/...` em C/C++) são rejeitados na validação.
+- **Verificação de Código Compilável:** Submissões C/C++ com `files` contendo apenas cabeçalhos (`.h`/`.hpp`) sem nenhum arquivo de implementação (`.c`/`.cpp`/`.cc`/`.cxx`) são rejeitadas antecipadamente.
+
+---
+
 ### Referência de Parâmetros e Status
 
 #### Parâmetros Suportados na Requisição
@@ -597,9 +704,11 @@ curl -X POST http://127.0.0.1:8080/execute \
 | Campo | Tipo | Modos | Obrigatório | Descrição |
 | :--- | :--- | :--- | :---: | :--- |
 | `language` | `string` | Todos | **Sim** | `python`, `python3`, `bash`, `sh`, `c`, `cpp`, `c++`. |
-| `code` | `string` | Todos | Condicional* | Código-fonte em texto plano (*obrigatório se `file_base64` ausente). |
-| `file_base64` | `string` | Todos | Condicional* | Código-fonte codificado em Base64 (máx. 2 MB). |
-| `filename` | `string` | Todos | Não | Nome customizado do arquivo no workspace temporário. |
+| `files` | `array` | Todos | Condicional* | Lista de arquivos do projeto: `[{ "name": "...", "content": "...", "content_base64": "..." }]` (máx. 50 arquivos / 10 MB total). |
+| `code` | `string` | Todos | Condicional* | Código-fonte de arquivo único em texto plano (*obrigatório se `files` e `file_base64` ausentes). |
+| `file_base64` | `string` | Todos | Condicional* | Código-fonte de arquivo único em Base64 (máx. 2 MB). |
+| `filename` | `string` | Todos | Não | Nome do arquivo (ou caminho relativo do entrypoint quando usado com `files`). |
+| `compile_flags` | `array` / `string` | Todos | Não | Flags customizadas do compilador C/C++ (ex: `["-O3", "-std=c11", "-Wall"]` ou `"-O3 -std=c11"`). Aliases aceitos: `compiler_flags`, `flags`. |
 | `stdin` | `string` | `interpreter`, `single` | Não | Entrada enviada para a `stdin` do processo. |
 | `expected_stdout` | `string` | `single_evaluation` | **Sim** | Saída esperada para comparação. |
 | `test_cases` | `array` | `multi_evaluation` | **Sim** | Bateria de testes: `[{ "stdin": "...", "expected_stdout": "..." }]` (máx. 20). |
@@ -708,7 +817,7 @@ sige/
 │   ├── config/                   # Resolução de configurações em camadas e tetos
 │   └── constants/                # Constantes e limites do sistema
 ├── test/                         # Bateria de testes automatizados
-│   ├── real_cases/               # Suíte adversarial com cenários de ataque reais (01 a 39)
+│   ├── real_cases/               # Suíte adversarial com cenários de ataque reais (01 a 48)
 │   ├── failure_discovery_test.go # Testes de detecção de regressões e edge-cases
 │   └── run_real_cases_test.go    # Testes de integração automatizados
 ├── Dockerfile                    # Multi-stage build com libseccomp e runtime Debian
@@ -732,13 +841,13 @@ go test -v ./...
 
 ### Suíte Adversarial de Testes Reais (`test/real_cases/`)
 
-O repositório conta com uma suíte adversarial com **39 casos de teste independentes** em Python, C, C++ e Bash, submetidos via `POST /execute` ou CLI. Cada arquivo exercita uma fronteira específica do isolamento do kernel contra o daemon ativo:
+O repositório conta com uma suíte adversarial com **48 casos de teste independentes** em Python, C, C++ e Bash (incluindo projetos multi-arquivo), submetidos via `POST /execute` ou CLI. Cada arquivo exercita uma fronteira específica do isolamento do kernel contra o daemon ativo:
 
 #### Convenção de Interpretação
-* **Bloqueios via Seccomp BPF (ex: 06, 09, 10, 11, 30, 38):** Syscalls fora da allowlist resultam em `ActKillProcess` (`SECCOMP_RET_KILL_PROCESS`). O processo é eliminado instantaneamente pelo kernel com `SIGSYS` (`exit_code: 255`, `status: failed`). Linhas posteriores de `Result:` não aparecem se o bloqueio funcionar com sucesso.
+* **Bloqueios via Seccomp BPF (ex: 06, 09, 10, 11, 30, 38, 40):** Syscalls fora da allowlist resultam em `ActKillProcess` (`SECCOMP_RET_KILL_PROCESS`). O processo é eliminado instantaneamente pelo kernel com `SIGSYS` (`exit_code: 255`, `status: failed`). Linhas posteriores de `Result:` não aparecem se o bloqueio funcionar com sucesso.
 * **Bloqueios via Recursos do SO (cgroups e RLIMITs):** Retornam erros capturáveis (`OSError`, `errno`), como `Errno 11` (PIDs), `Errno 24` (arquivos abertos), `Errno 27` (tamanho de arquivo), `Errno 30` (rootfs read-only) ou término via OOM / Timeout.
 
-#### Catálogo dos 39 Casos de Teste
+#### Catálogo dos 48 Casos de Teste
 
 | # | Arquivo | Linguagem | Vetor / Mecanismo Avaliado | Resultado Esperado |
 |---|---|---|---|---|
@@ -781,18 +890,27 @@ O repositório conta com uma suíte adversarial com **39 casos de teste independ
 | **37** | `37_cve_2024_28185_symlink_write.py` | Python | Vetor da CVE-2024-28185: symlink desviando escrita do host | `/workspace` somente-leitura; escrita antes do run |
 | **38** | `38_cve_2024_28189_symlink_chown.py` | Python | Vetor da CVE-2024-28189: symlink desviando `chown` do host | `chown` fora da allowlist; processo morto |
 | **39** | `39_cve_2024_29021_ssrf.py` | Python | Vetor da CVE-2024-29021: SSRF contra alvos internos | Namespace sem interfaces; alvos inalcançáveis |
+| **40** | `40_socket_af_vsock_alg_blocked.c` | C | Bloqueio de famílias de socket exóticas (`AF_VSOCK`, `AF_ALG`) | Restrito a `AF_UNIX`/`AF_INET`/`AF_INET6`; morto por Seccomp |
+| **41** | `41_signal_sigxfsz_real.c` | C | Detecção real de `SIGXFSZ` via `WaitStatus` ao exceder `RLIMIT_FSIZE` | `file_size_exceeded` |
+| **42** | `42_forged_stderr_detection.c` | C | Prevenção de falsificação de status via `stderr` forjado (`File size limit exceeded`) | `completed` (`exit_code: 0`, imune a spoofing de stderr) |
+| **43** | `43_compile_error_workspace_cleanup.c` | C | Limpeza garantida do diretório efêmero em caso de erro de compilação | `compilation_error` sem vazamento de diretórios em `/workspace` |
+| **44** | `44_capbset_thread_safety.c` | C | Consistência do Capability Bounding Set entre threads (`LockOSThread`) | `CapBnd == 0` em todas as threads |
+| **45** | `45_not_pid_one.c` | C | Execução do código do usuário como `PID > 1` (mini-init `PID 1` repassa sinais) | `getpid() > 1`, sem imunidade de `PID 1` a sinais |
+| **46** | `46_compile_write_workspace_subdir.c` | C | Travessia (`0755`) e imutabilidade (`EROFS`) de subpastas em `/workspace` pós-compilação | `PASS` (`READONLY_OK`, `exit_code: 0`) |
+| **47** | `47_multifile_import_and_readonly.py` | Python | `os.listdir('/workspace')` e `importlib` sob `nobody` (`0755`) + bloqueio de escrita (`EROFS`) | `PASS` (`MULTIFILE_DIR_READ_AND_RO_OK`) |
+| **48** | `48_multifile_c_project/` | C (5 arquivos) | Projeto C multi-módulo (`main.c`, `include/*.h`, `src/*.c` + `-lm`) enviado via `files` | `PASS` (`PERIMETER=12.00 MEAN=5.00 STDDEV=2.00 READONLY_OK`) |
 
 #### Execução dos Testes Adversariais
 
 ```bash
-# Executar a suíte completa de testes adversariais via Go:
-go test -v ./test/ -run TestRealCaseAPI_AllPayloadsSuite
+# Executar a suíte completa de testes adversariais e multi-arquivo via Go:
+go test -v ./test/ -run "TestRealCaseAPI_AllPayloadsSuite|TestRealCaseAPI_MultiFiles_ExecutionAndCompilation"
 
-# Ou submeter qualquer caso individual contra a API em execução:
+# Submeter o projeto C multi-arquivo (Caso 48) contra a API em execução:
 curl -X POST http://localhost:8080/execute \
   -H "X-API-Key: <SUA_CHAVE>" \
   -H "Content-Type: application/json" \
-  -d "{\"language\": \"python\", \"code\": $(jq -Rs . < test/real_cases/01_quicksort.py)}"
+  --data-binary @test/real_cases/48_multifile_c_project/payload.json
 ```
 
 ---

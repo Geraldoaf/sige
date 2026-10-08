@@ -18,16 +18,18 @@ func compileSource(language, hostWd, sandboxSourcePath, sandboxBinaryPath string
 
 // prepareWorkspace prepara o diretório efêmero delegando para sandbox.PrepareWorkspace.
 func prepareWorkspace(req *ExecuteRequest, execID string) (command string, args []string, workspace string, cleanup func(), err error) {
-	if req.Filename != "" && !isSafeFilename(req.Filename) {
+	if req.Filename != "" && !isSafeFilename(req.Filename) && !sandbox.IsSafeRelativePath(req.Filename) {
 		return "", nil, "", nil, errors.New("Invalid filename in 'filename'")
 	}
 
 	spec := sandbox.WorkspaceSpec{
-		Language:   req.Language,
-		Filename:   req.Filename,
-		Code:       req.Code,
-		FileBase64: req.FileBase64,
-		ExecID:     execID,
+		Language:     req.Language,
+		Files:        req.Files,
+		Filename:     req.Filename,
+		Code:         req.Code,
+		FileBase64:   req.FileBase64,
+		CompileFlags: req.GetCompileFlags(),
+		ExecID:       execID,
 	}
 
 	res, err := sandbox.PrepareWorkspace(spec)

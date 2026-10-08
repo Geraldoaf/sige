@@ -12,7 +12,7 @@ import (
 // HandleHealth processa requisições de liveness probe (GET /health).
 func HandleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		presenter.RenderError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Método HTTP não permitido", nil)
+		presenter.RenderError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "HTTP method not allowed", nil)
 		return
 	}
 	presenter.RenderJSON(w, http.StatusOK, map[string]any{
@@ -25,7 +25,7 @@ func HandleHealth(w http.ResponseWriter, r *http.Request) {
 // Verifica se o kernel possui cgroups v2, se o binário sige-launch existe e se o pool tem vagas.
 func HandleReady(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		presenter.RenderError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Método HTTP não permitido", nil)
+		presenter.RenderError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "HTTP method not allowed", nil)
 		return
 	}
 
@@ -36,7 +36,7 @@ func HandleReady(w http.ResponseWriter, r *http.Request) {
 	if cgroups.VerifyCgroupsVersion() {
 		checks["cgroups_v2"] = "ok"
 	} else {
-		checks["cgroups_v2"] = "failed: host não está em Unified cgroup v2 mode"
+		checks["cgroups_v2"] = "failed: host is not in unified cgroup v2 mode"
 		allOk = false
 	}
 
@@ -52,7 +52,7 @@ func HandleReady(w http.ResponseWriter, r *http.Request) {
 	if info, err := os.Stat(launcherPath); err == nil && !info.IsDir() {
 		checks["launcher_binary"] = "ok"
 	} else {
-		checks["launcher_binary"] = "warning: binário do launcher não localizado em " + launcherPath
+		checks["launcher_binary"] = "warning: launcher binary not found at " + launcherPath
 	}
 
 	// 3. Verifica capacidade do pool

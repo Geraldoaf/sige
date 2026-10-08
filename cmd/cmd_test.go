@@ -13,7 +13,7 @@ func TestCLIRootCmdFlags(t *testing.T) {
 	if rootCmd.Use != "sige" {
 		t.Errorf("rootCmd.Use incorreto: esperado 'sige', obtido '%s'", rootCmd.Use)
 	}
-	if rootCmd.Short != "SIGE - Sistema de Isolamento e Gerenciamento de Execução" {
+	if rootCmd.Short != "SIGE - Execution Isolation and Management System" {
 		t.Errorf("rootCmd.Short incorreto: obtido '%s'", rootCmd.Short)
 	}
 }

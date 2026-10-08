@@ -81,7 +81,7 @@ func (p *FileKeyProvider) loadOrGenerate() string {
 	p.isGenerated = true
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
-		panic(fmt.Sprintf("falha crítica de entropia ao gerar API Key: %v", err))
+		panic(fmt.Sprintf("critical entropy failure generating API Key: %v", err))
 	}
 	key := hex.EncodeToString(buf)
 

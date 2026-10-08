@@ -99,7 +99,7 @@ func KillAndDeleteCgroup(name string) error {
 			break
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("cgroup %s ainda tem processos após cgroup.kill: %s", name, strings.TrimSpace(string(procs)))
+			return fmt.Errorf("cgroup %s still has processes after cgroup.kill: %s", name, strings.TrimSpace(string(procs)))
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

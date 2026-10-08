@@ -50,9 +50,9 @@ func announceAPIKey() {
 
 	if key == "" {
 		if os.Getenv("SIGE_ALLOW_UNAUTHENTICATED") == "true" {
-			log.Println("[SIGE] Autenticação desabilitada (SIGE_ALLOW_UNAUTHENTICATED=true)")
+			log.Println("[SIGE] Authentication disabled (SIGE_ALLOW_UNAUTHENTICATED=true)")
 		} else {
-			log.Println("[SIGE] AVISO: nenhuma chave de API configurada.")
+			log.Println("[SIGE] WARNING: no API key configured.")
 		}
 		return
 	}
@@ -62,13 +62,13 @@ func announceAPIKey() {
 		if len(key) >= 8 {
 			masked = key[:4] + "..." + key[len(key)-4:]
 		}
-		fmt.Fprintf(os.Stdout, "[SIGE] API Key gerada e armazenada em arquivo: %s\n", masked)
+		fmt.Fprintf(os.Stdout, "[SIGE] Generated API Key stored in file: %s\n", masked)
 	} else {
 		masked := key
 		if len(key) >= 8 {
 			masked = key[:4] + "..." + key[len(key)-4:]
 		}
-		fmt.Fprintf(os.Stdout, "[SIGE] API Key carregada: %s\n", masked)
+		fmt.Fprintf(os.Stdout, "[SIGE] API Key loaded: %s\n", masked)
 	}
 }
 
@@ -180,7 +180,7 @@ func StartServer(port string) {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("[SIGE] Erro no encerramento: %v", err)
+			log.Printf("[SIGE] Error during shutdown: %v", err)
 		}
 	}
 }
@@ -213,7 +213,7 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 
 	defaultCfg, err := config.Resolve("config.json")
 	if err != nil {
-		log.Printf("[SIGE] Erro ao resolver configuracao: %v", err)
+		log.Printf("[SIGE] Error resolving configuration: %v", err)
 		presenter.RenderError(w, http.StatusInternalServerError, "CONFIG_ERROR", "Internal server error: configuration failure", nil)
 		return
 	}
@@ -277,7 +277,7 @@ func handleExecute(w http.ResponseWriter, r *http.Request) {
 			handlers.RecordExecution("compilation_error")
 			return
 		}
-		log.Printf("[SIGE] Erro ao preparar workspace: %v", err)
+		log.Printf("[SIGE] Error preparing workspace: %v", err)
 		presenter.RenderError(w, http.StatusInternalServerError, "WORKSPACE_ERROR", "Internal server error: failed to prepare execution workspace", nil)
 		return
 	}
